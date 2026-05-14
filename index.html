@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>RC構造図・計算書 整合性確認ツール</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root {
+    --ok: #2e7d32;
+    --ng: #c62828;
+    --warn: #ef6c00;
+    --border: #d0d7de;
+    --bg: #f6f8fa;
+    --accent: #0969da;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Yu Gothic UI", "Meiryo", sans-serif;
+    margin: 0; padding: 16px;
+    background: var(--bg); color: #1f2328;
+  }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  h2 { font-size: 15px; margin: 16px 0 8px; }
+  .layout { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .panel {
+    background: #fff; border: 1px solid var(--border);
+    border-radius: 6px; padding: 12px;
+  }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 6px;
+    padding: 24px; text-align: center; cursor: pointer;
+    color: #57606a; transition: 0.15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: #f0f7ff; }
+  .drop.loaded { border-style: solid; border-color: var(--ok); background: #f0fff4; color: #1f2328; }
+  input[type=file] { display: none; }
+  .tabs { display: flex; gap: 4px; margin: 12px 0; }
+  .tab {
+    padding: 6px 14px; border: 1px solid var(--border);
+    background: #fff; border-radius: 4px; cursor: pointer; font-size: 13px;
+  }
+  .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary {
+    background: var(--accent); color: #fff; border: 0;
+    padding: 8px 18px; border-radius: 4px; cursor: pointer; font-size: 14px;
+  }
+  button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary {
+    background: #fff; border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  th, td { border: 1px solid var(--border); padding: 5px 8px; text-align: left; }
+  th { background: var(--bg); font-weight: 600; }
+  tr.ng td { background: #ffeef0; }
+  tr.ok td { background: #f0fff4; }
+  tr.warn td { background: #fff8e1; }
+  .badge {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    font-size: 11px; font-weight: 600;
+  }
+  .badge.ok { background: var(--ok); color: #fff; }
+  .badge.ng { background: var(--ng); color: #fff; }
+  .badge.warn { background: var(--warn); color: #fff; }
+  .summary {
+    display: flex; gap: 16px; margin: 8px 0; font-size: 14px;
+  }
+  .summary span { padding: 4px 10px; border-radius: 4px; background: var(--bg); }
+  details { margin-top: 8px; font-size: 12px; color: #57606a; }
+  details pre {
+    background: #f6f8fa; padding: 8px; border-radius: 4px;
+    max-height: 200px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  .toolbar { display: flex; gap: 8px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+  .note { font-size: 12px; color: #57606a; margin-top: 4px; }
+  .filename { font-weight: 600; color: var(--accent); word-break: break-all; }
+</style>
+</head>
+<body>
+
+<h1>RC構造図・計算書 整合性確認ツール <span style="font-size:12px;color:#57606a;">(小梁・スラブ)</span></h1>
+
+<div class="layout">
+  <div class="panel">
+    <h2>① 計算書 PDF</h2>
+    <label class="drop" id="dropCalc">
+      <input type="file" id="fileCalc" accept="application/pdf">
+      <div id="labelCalc">クリック または ドラッグ＆ドロップ<br>でPDFを選択</div>
+    </label>
+  </div>
+  <div class="panel">
+    <h2>② 構造図 PDF</h2>
+    <label class="drop" id="dropDwg">
+      <input type="file" id="fileDwg" accept="application/pdf">
+      <div id="labelDwg">クリック または ドラッグ＆ドロップ<br>でPDFを選択</div>
+    </label>
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" data-mode="beam">小梁</div>
+  <div class="tab" data-mode="slab">スラブ</div>
+</div>
+
+<div class="toolbar">
+  <button class="primary" id="run" disabled>整合性チェック実行</button>
+  <button class="secondary" id="exportCsv" disabled>結果をCSV出力</button>
+  <span class="note">※ 抽出パターンは社内フォーマットに合わせて調整が必要な場合があります</span>
+</div>
+
+<div id="results"></div>
+
+<details>
+  <summary>抽出テキスト（デバッグ用）</summary>
+  <h2 style="margin-top:8px;">計算書</h2>
+  <pre id="rawCalc">(未読込)</pre>
+  <h2>構造図</h2>
+  <pre id="rawDwg">(未読込)</pre>
+</details>
+
+<script>
+if (typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+const state = {
+  calcText: '', dwgText: '',
+  calcName: '', dwgName: '',
+  mode: 'beam',
+  lastResults: null
+};
+
+// ====== PDFテキスト抽出 ======
+async function extractPdfText(file) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  let out = '';
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    // Y座標でソートして行を組み立てる（CADや表組みの並びを保持しやすくする）
+    const items = content.items.map(it => ({
+      str: it.str,
+      x: it.transform[4],
+      y: it.transform[5]
+    }));
+    items.sort((a, b) => (b.y - a.y) || (a.x - b.x));
+    let lastY = null, line = '';
+    for (const it of items) {
+      if (lastY === null || Math.abs(it.y - lastY) < 3) {
+        line += (line && !line.endsWith(' ') ? ' ' : '') + it.str;
+      } else {
+        out += line + '\n';
+        line = it.str;
+      }
+      lastY = it.y;
+    }
+    if (line) out += line + '\n';
+    out += '\n--- page ' + i + ' ---\n';
+  }
+  return out;
+}
+
+// ====== 小梁抽出 ======
+// 想定パターン: 部材記号 B1 / b1 / CB1 など、断面 300x500 / 300×500、配筋 2-D19 / 2D19、STP D10@200
+function parseBeams(text) {
+  const beams = {};
+  // 行単位で走査して部材記号を起点に近傍情報をまとめる
+  const lines = text.split(/\r?\n/);
+  // 記号 (例: B1, b1, CB1, 2B1, RB1)
+  const symRe = /\b([0-9]?[A-Za-z]{1,3}[0-9]{1,3}[A-Za-z]?)\b/g;
+  const sectionRe = /(\d{2,4})\s*[x×X*]\s*(\d{2,4})/;
+  const topBotRe = /([0-9]+)\s*[-－]?\s*D\s?(10|13|16|19|22|25|29|32|35|38|41)/gi;
+  const stpRe = /(?:STP|stp|あばら|スタラップ|stirrup)[^\n]{0,20}?(?:([0-9])\s*[-－])?\s*D\s?(10|13|16)\s*@\s*(\d{2,4})/i;
+  const stpRe2 = /D\s?(10|13|16)\s*@\s*(\d{2,4})/i;
+
+  // 計算書の表組みは部材記号が行頭に出やすい。図面のリストも同様。
+  // 各行で部材記号を見つけ、その行 + 後続2-3行をブロックとして解析する。
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // 小梁限定: B,b,CB,RB で始まり数字を含む（柱C/大梁G/壁W等は除外）
+    const symMatches = line.match(/\b((?:CB|RB|b|B)[0-9]{1,3}[A-Za-z]?)\b/g);
+    if (!symMatches) continue;
+    for (const sym of symMatches) {
+      // 大梁(G)・柱(C)・基礎(F)を除外
+      if (/^G|^C\d|^FG|^F[0-9]/.test(sym)) continue;
+      const block = lines.slice(i, Math.min(i + 4, lines.length)).join(' ');
+      const data = beams[sym] || { sym, sources: 0 };
+      // 断面
+      const sec = block.match(sectionRe);
+      if (sec && !data.section) data.section = `${sec[1]}×${sec[2]}`;
+      // 配筋（上下端筋の判別は文脈ベース。「上端」「下端」キーワード優先、なければ最初の2件）
+      const topMatch = block.match(/上端[^\n]{0,20}?([0-9]+)\s*[-－]?\s*D\s?(\d{2})/);
+      const botMatch = block.match(/下端[^\n]{0,20}?([0-9]+)\s*[-－]?\s*D\s?(\d{2})/);
+      if (topMatch && !data.top) data.top = `${topMatch[1]}-D${topMatch[2]}`;
+      if (botMatch && !data.bot) data.bot = `${botMatch[1]}-D${botMatch[2]}`;
+      // 上下端キーワードがない場合のフォールバック
+      if ((!data.top || !data.bot)) {
+        const allRebar = [...block.matchAll(/([0-9]+)\s*[-－]?\s*D\s?(10|13|16|19|22|25|29|32|35|38|41)/gi)];
+        if (allRebar.length >= 2) {
+          if (!data.top) data.top = `${allRebar[0][1]}-D${allRebar[0][2]}`;
+          if (!data.bot) data.bot = `${allRebar[1][1]}-D${allRebar[1][2]}`;
+        }
+      }
+      // あばら筋
+      const stp = block.match(stpRe);
+      if (stp && !data.stp) {
+        data.stp = `${stp[1] ? stp[1] + '-' : ''}D${stp[2]}@${stp[3]}`;
+      } else if (!data.stp) {
+        const stp2 = block.match(stpRe2);
+        if (stp2) data.stp = `D${stp2[1]}@${stp2[2]}`;
+      }
+      data.sources++;
+      data.raw = (data.raw || '') + block + '\n';
+      beams[sym] = data;
+    }
+  }
+  return beams;
+}
+
+// ====== スラブ抽出 ======
+// 想定: 記号 S1, FS1 / 厚さ t=150 / 配筋 D10@200 (短辺・長辺 × 上端・下端)
+function parseSlabs(text) {
+  const slabs = {};
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const symMatches = line.match(/\b((?:FS|RS|S)[0-9]{1,3}[A-Za-z]?)\b/g);
+    if (!symMatches) continue;
+    for (const sym of symMatches) {
+      if (/^SD|^STP/i.test(sym)) continue;
+      const block = lines.slice(i, Math.min(i + 5, lines.length)).join(' ');
+      const data = slabs[sym] || { sym, sources: 0 };
+      // 厚さ
+      const t = block.match(/t\s*[=＝:]?\s*(\d{2,3})/i) || block.match(/厚\s*[=＝:]?\s*(\d{2,3})/);
+      if (t && !data.thickness) data.thickness = `${t[1]}`;
+      // 配筋4種を順番に抽出（短辺上端・短辺下端・長辺上端・長辺下端）
+      const sxU = block.match(/(?:短辺|Sx|Sx1|短)[^\n]{0,15}?(?:上端|上)[^\n]{0,10}?D\s?(\d{2})\s*@\s*(\d{2,4})/);
+      const sxL = block.match(/(?:短辺|Sx|短)[^\n]{0,15}?(?:下端|下)[^\n]{0,10}?D\s?(\d{2})\s*@\s*(\d{2,4})/);
+      const lxU = block.match(/(?:長辺|Ly|長)[^\n]{0,15}?(?:上端|上)[^\n]{0,10}?D\s?(\d{2})\s*@\s*(\d{2,4})/);
+      const lxL = block.match(/(?:長辺|Ly|長)[^\n]{0,15}?(?:下端|下)[^\n]{0,10}?D\s?(\d{2})\s*@\s*(\d{2,4})/);
+      if (sxU && !data.sxTop) data.sxTop = `D${sxU[1]}@${sxU[2]}`;
+      if (sxL && !data.sxBot) data.sxBot = `D${sxL[1]}@${sxL[2]}`;
+      if (lxU && !data.lyTop) data.lyTop = `D${lxU[1]}@${lxU[2]}`;
+      if (lxL && !data.lyBot) data.lyBot = `D${lxL[1]}@${lxL[2]}`;
+      // フォールバック: 順序通り4件
+      const all = [...block.matchAll(/D\s?(10|13|16)\s*@\s*(\d{2,4})/gi)];
+      const slots = ['sxTop', 'sxBot', 'lyTop', 'lyBot'];
+      for (let k = 0; k < Math.min(all.length, 4); k++) {
+        if (!data[slots[k]]) data[slots[k]] = `D${all[k][1]}@${all[k][2]}`;
+      }
+      data.sources++;
+      data.raw = (data.raw || '') + block + '\n';
+      slabs[sym] = data;
+    }
+  }
+  return slabs;
+}
+
+// ====== 比較 ======
+function normalize(v) {
+  if (!v) return '';
+  return String(v).replace(/\s+/g, '').replace(/[ｘＸx*]/g, '×').toUpperCase();
+}
+function compare(a, b) {
+  const na = normalize(a), nb = normalize(b);
+  if (!na && !nb) return 'none';
+  if (!na || !nb) return 'warn';
+  return na === nb ? 'ok' : 'ng';
+}
+
+function renderBeamResults(calc, dwg) {
+  const symbols = [...new Set([...Object.keys(calc), ...Object.keys(dwg)])].sort();
+  const fields = [
+    { key: 'section', label: '断面 (B×D)' },
+    { key: 'top', label: '上端筋' },
+    { key: 'bot', label: '下端筋' },
+    { key: 'stp', label: 'あばら筋' }
+  ];
+  let okCount = 0, ngCount = 0, warnCount = 0;
+  let html = `<table><thead><tr><th>部材</th>`;
+  fields.forEach(f => html += `<th>${f.label} (計算書)</th><th>${f.label} (構造図)</th><th>判定</th>`);
+  html += `</tr></thead><tbody>`;
+  const rows = [];
+  for (const sym of symbols) {
+    const c = calc[sym] || {}, d = dwg[sym] || {};
+    let rowVerdict = 'ok';
+    const cells = [];
+    for (const f of fields) {
+      const v = compare(c[f.key], d[f.key]);
+      cells.push({ c: c[f.key] || '-', d: d[f.key] || '-', v });
+      if (v === 'ng') rowVerdict = 'ng';
+      else if (v === 'warn' && rowVerdict !== 'ng') rowVerdict = 'warn';
+    }
+    if (rowVerdict === 'ok') okCount++;
+    else if (rowVerdict === 'ng') ngCount++;
+    else warnCount++;
+    rows.push({ sym, cells, verdict: rowVerdict });
+  }
+  for (const r of rows) {
+    html += `<tr class="${r.verdict}"><td><b>${r.sym}</b></td>`;
+    for (const cell of r.cells) {
+      const badge = cell.v === 'ok' ? '<span class="badge ok">OK</span>'
+                  : cell.v === 'ng' ? '<span class="badge ng">NG</span>'
+                  : cell.v === 'warn' ? '<span class="badge warn">片側のみ</span>'
+                  : '-';
+      html += `<td>${cell.c}</td><td>${cell.d}</td><td>${badge}</td>`;
+    }
+    html += `</tr>`;
+  }
+  html += `</tbody></table>`;
+  const summary = `<div class="summary">
+    <span>部材数: ${symbols.length}</span>
+    <span style="color:var(--ok);">OK: ${okCount}</span>
+    <span style="color:var(--ng);">NG: ${ngCount}</span>
+    <span style="color:var(--warn);">要確認: ${warnCount}</span>
+  </div>`;
+  return { html: summary + html, rows, fields };
+}
+
+function renderSlabResults(calc, dwg) {
+  const symbols = [...new Set([...Object.keys(calc), ...Object.keys(dwg)])].sort();
+  const fields = [
+    { key: 'thickness', label: '厚さ t (mm)' },
+    { key: 'sxTop', label: '短辺・上端' },
+    { key: 'sxBot', label: '短辺・下端' },
+    { key: 'lyTop', label: '長辺・上端' },
+    { key: 'lyBot', label: '長辺・下端' }
+  ];
+  let okCount = 0, ngCount = 0, warnCount = 0;
+  let html = `<table><thead><tr><th>部材</th>`;
+  fields.forEach(f => html += `<th>${f.label} (計算書)</th><th>${f.label} (構造図)</th><th>判定</th>`);
+  html += `</tr></thead><tbody>`;
+  const rows = [];
+  for (const sym of symbols) {
+    const c = calc[sym] || {}, d = dwg[sym] || {};
+    let rowVerdict = 'ok';
+    const cells = [];
+    for (const f of fields) {
+      const v = compare(c[f.key], d[f.key]);
+      cells.push({ c: c[f.key] || '-', d: d[f.key] || '-', v });
+      if (v === 'ng') rowVerdict = 'ng';
+      else if (v === 'warn' && rowVerdict !== 'ng') rowVerdict = 'warn';
+    }
+    if (rowVerdict === 'ok') okCount++;
+    else if (rowVerdict === 'ng') ngCount++;
+    else warnCount++;
+    rows.push({ sym, cells, verdict: rowVerdict });
+  }
+  for (const r of rows) {
+    html += `<tr class="${r.verdict}"><td><b>${r.sym}</b></td>`;
+    for (const cell of r.cells) {
+      const badge = cell.v === 'ok' ? '<span class="badge ok">OK</span>'
+                  : cell.v === 'ng' ? '<span class="badge ng">NG</span>'
+                  : cell.v === 'warn' ? '<span class="badge warn">片側のみ</span>'
+                  : '-';
+      html += `<td>${cell.c}</td><td>${cell.d}</td><td>${badge}</td>`;
+    }
+    html += `</tr>`;
+  }
+  html += `</tbody></table>`;
+  const summary = `<div class="summary">
+    <span>部材数: ${symbols.length}</span>
+    <span style="color:var(--ok);">OK: ${okCount}</span>
+    <span style="color:var(--ng);">NG: ${ngCount}</span>
+    <span style="color:var(--warn);">要確認: ${warnCount}</span>
+  </div>`;
+  return { html: summary + html, rows, fields };
+}
+
+// ====== CSV出力 ======
+function toCsv(rows, fields) {
+  const header = ['部材記号'];
+  for (const f of fields) header.push(`${f.label}_計算書`, `${f.label}_構造図`, `${f.label}_判定`);
+  const lines = [header.join(',')];
+  for (const r of rows) {
+    const cols = [r.sym];
+    for (const c of r.cells) cols.push(c.c, c.d, c.v.toUpperCase());
+    lines.push(cols.map(s => `"${String(s).replace(/"/g, '""')}"`).join(','));
+  }
+  return '﻿' + lines.join('\r\n');
+}
+
+// ====== UI制御 ======
+function setupDrop(dropEl, inputEl, labelEl, kind) {
+  dropEl.addEventListener('click', () => inputEl.click());
+  dropEl.addEventListener('dragover', e => { e.preventDefault(); dropEl.classList.add('over'); });
+  dropEl.addEventListener('dragleave', () => dropEl.classList.remove('over'));
+  dropEl.addEventListener('drop', e => {
+    e.preventDefault(); dropEl.classList.remove('over');
+    if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0], kind, dropEl, labelEl);
+  });
+  inputEl.addEventListener('change', e => {
+    if (e.target.files[0]) loadFile(e.target.files[0], kind, dropEl, labelEl);
+  });
+}
+
+async function loadFile(file, kind, dropEl, labelEl) {
+  labelEl.innerHTML = `読込中... <span class="filename">${file.name}</span>`;
+  try {
+    const text = await extractPdfText(file);
+    if (kind === 'calc') {
+      state.calcText = text; state.calcName = file.name;
+      document.getElementById('rawCalc').textContent = text || '(空)';
+    } else {
+      state.dwgText = text; state.dwgName = file.name;
+      document.getElementById('rawDwg').textContent = text || '(空)';
+    }
+    dropEl.classList.add('loaded');
+    labelEl.innerHTML = `読込完了<br><span class="filename">${file.name}</span><br><small>${text.length} 文字抽出</small>`;
+    updateRunButton();
+  } catch (err) {
+    labelEl.innerHTML = `エラー: ${err.message}`;
+    console.error(err);
+  }
+}
+
+function updateRunButton() {
+  document.getElementById('run').disabled = !(state.calcText && state.dwgText);
+}
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    state.mode = tab.dataset.mode;
+  });
+});
+
+document.getElementById('run').addEventListener('click', () => {
+  const isBeam = state.mode === 'beam';
+  const calc = isBeam ? parseBeams(state.calcText) : parseSlabs(state.calcText);
+  const dwg  = isBeam ? parseBeams(state.dwgText)  : parseSlabs(state.dwgText);
+  const result = isBeam ? renderBeamResults(calc, dwg) : renderSlabResults(calc, dwg);
+  document.getElementById('results').innerHTML = result.html;
+  state.lastResults = result;
+  document.getElementById('exportCsv').disabled = false;
+});
+
+document.getElementById('exportCsv').addEventListener('click', () => {
+  if (!state.lastResults) return;
+  const csv = toCsv(state.lastResults.rows, state.lastResults.fields);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `整合性確認_${state.mode === 'beam' ? '小梁' : 'スラブ'}_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+setupDrop(document.getElementById('dropCalc'), document.getElementById('fileCalc'),
+          document.getElementById('labelCalc'), 'calc');
+setupDrop(document.getElementById('dropDwg'), document.getElementById('fileDwg'),
+          document.getElementById('labelDwg'), 'dwg');
+</script>
+</body>
+</html>
