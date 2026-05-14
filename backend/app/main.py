@@ -12,7 +12,7 @@ from .checker import Diff, compare
 from .config import UPLOAD_DIR
 from .db import Project, UploadedFile, get_session, init_db
 from .models import MemberSet
-from .parsers import DrawingPdfParser, SSCalcPdfParser, StructureSuitePdfParser
+from .parsers import DrawingPdfParser, StructureSuitePdfParser
 
 app = FastAPI(title="SUGA - 構造図/計算書整合チェック", version="0.1.0")
 
@@ -87,10 +87,8 @@ def run_check(project_id: int, calc_software: str = Form("ss")) -> dict:
         raise HTTPException(400, "drawing と calc の両方をアップロードしてください")
 
     drawing_set: MemberSet = DrawingPdfParser().parse(Path(drawing.stored_path))
-    if calc_software == "structuresuite":
-        calc_set: MemberSet = StructureSuitePdfParser().parse(Path(calc.stored_path))
-    else:
-        calc_set = SSCalcPdfParser().parse(Path(calc.stored_path))
+    calc_set: MemberSet = StructureSuitePdfParser().parse(Path(calc.stored_path))
+    _ = calc_software  # 将来 SS7/SS3 を実装したら分岐
 
     diffs: list[Diff] = compare(drawing_set, calc_set)
     return {

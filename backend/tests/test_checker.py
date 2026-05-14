@@ -1,32 +1,34 @@
 from app.checker import DiffKind, compare
-from app.models import Category, Member, MemberSet, Rebar, Section, Source
+from app.models import BeamMember, MemberSet, PositionRebar, Section, Source
 
 
-def _m(cat, mark, floor, source, b=None, D=None, thickness=None, main=None, hoop=None):
-    return Member(
-        category=cat,
+def _m(mark, source, B=None, D=None, positions=None):
+    return BeamMember(
         mark=mark,
-        floor=floor,
-        section=Section(b=b, D=D, thickness=thickness),
-        rebar=Rebar(main=main, hoop=hoop),
+        section=Section(B=B, D=D),
+        positions=positions or [],
         source=source,
     )
 
 
-def test_section_mismatch_detected():
+def test_section_B_mismatch_detected():
     drawing = MemberSet(source=Source.DRAWING, file_name="d.pdf", members=[
-        _m(Category.COLUMN, "C1", "2F", Source.DRAWING, b=800, D=800, main="12-D25", hoop="4-D13@100"),
+        _m("B1", Source.DRAWING, B=300, positions=[
+            PositionRebar(location="全断面", top="4-D22", bottom="4-D22", stirrup="2-D10@150", web="2-D10"),
+        ]),
     ])
     calc = MemberSet(source=Source.CALC, file_name="c.pdf", members=[
-        _m(Category.COLUMN, "C1", "2F", Source.CALC, b=800, D=900, main="12-D25", hoop="4-D13@100"),
+        _m("B1", Source.CALC, B=400, D=700, positions=[
+            PositionRebar(location="SX1端", top="4-D22", bottom="4-D22", stirrup="2-D10@150"),
+        ]),
     ])
     diffs = compare(drawing, calc)
-    assert any(d.kind == DiffKind.SECTION_MISMATCH for d in diffs)
+    assert any(d.kind == DiffKind.SECTION_B_MISMATCH for d in diffs)
 
 
 def test_only_in_drawing_detected():
     drawing = MemberSet(source=Source.DRAWING, file_name="d.pdf", members=[
-        _m(Category.GIRDER, "G99", "RF", Source.DRAWING, b=400, D=700),
+        _m("B99", Source.DRAWING, B=300),
     ])
     calc = MemberSet(source=Source.CALC, file_name="c.pdf", members=[])
     diffs = compare(drawing, calc)
@@ -36,20 +38,32 @@ def test_only_in_drawing_detected():
 
 def test_rebar_mismatch_detected():
     drawing = MemberSet(source=Source.DRAWING, file_name="d.pdf", members=[
-        _m(Category.BEAM, "B1", "3F", Source.DRAWING, b=300, D=600, main="4-D22"),
+        _m("B1", Source.DRAWING, B=400, positions=[
+            PositionRebar(location="全断面", top="4-D22", bottom="4-D22"),
+        ]),
     ])
     calc = MemberSet(source=Source.CALC, file_name="c.pdf", members=[
-        _m(Category.BEAM, "B1", "3F", Source.CALC, b=300, D=600, main="5-D22"),
+        _m("B1", Source.CALC, B=400, D=700, positions=[
+            PositionRebar(location="SX1端", top="5-D22", bottom="4-D22"),
+        ]),
     ])
     diffs = compare(drawing, calc)
     assert any(d.kind == DiffKind.REBAR_MISMATCH for d in diffs)
 
 
-def test_no_diff_when_identical():
+def test_no_diff_when_identical_rebar_set():
     drawing = MemberSet(source=Source.DRAWING, file_name="d.pdf", members=[
-        _m(Category.WALL, "W18", "2F", Source.DRAWING, thickness=180, main="D13@200"),
+        _m("B1A", Source.DRAWING, B=400, positions=[
+            PositionRebar(location="全断面", top="4-D22", bottom="4-D22", stirrup="2-D10@150"),
+            PositionRebar(location="SX2端", top="4/2-D22", bottom="4-D22", stirrup="2-D10@150"),
+        ]),
     ])
     calc = MemberSet(source=Source.CALC, file_name="c.pdf", members=[
-        _m(Category.WALL, "W18", "2F", Source.CALC, thickness=180, main="D13@200"),
+        _m("B1A", Source.CALC, B=400, D=700, positions=[
+            PositionRebar(location="SX1端", top="4-D22", bottom="4-D22", stirrup="2-D10@150"),
+            PositionRebar(location="中央", top="4-D22", bottom="4-D22", stirrup="2-D10@150"),
+            PositionRebar(location="SX2端", top="4/2-D22", bottom="4-D22", stirrup="2-D10@150"),
+        ]),
     ])
+    # B が同じ・配筋集合が同じなら差分なし
     assert compare(drawing, calc) == []
