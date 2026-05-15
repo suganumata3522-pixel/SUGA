@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import io
 import shutil
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+import fitz  # PyMuPDF
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from sqlmodel import select
 
 from .checker import Diff, compare
@@ -97,3 +100,63 @@ def run_check(project_id: int, calc_software: str = Form("ss")) -> dict:
         "diff_count": len(diffs),
         "diffs": [d.model_dump() for d in diffs],
     }
+
+
+def _uploaded_pdf_path(project_id: int, role: str) -> Path:
+    with get_session() as s:
+        upload = s.exec(
+            select(UploadedFile)
+            .where(UploadedFile.project_id == project_id)
+            .where(UploadedFile.role == role)
+            .order_by(UploadedFile.id.desc())
+        ).first()
+    if not upload:
+        raise HTTPException(404, f"{role} がアップロードされていません")
+    path = Path(upload.stored_path)
+    if not path.exists():
+        raise HTTPException(404, f"PDFファイルが見つかりません: {path}")
+    return path
+
+
+@app.get("/api/projects/{project_id}/highlight")
+def highlight(
+    project_id: int,
+    role: str = Query(..., pattern="^(drawing|calc)$"),
+    page: int = Query(1, ge=1),
+    x0: float | None = None,
+    y0: float | None = None,
+    x1: float | None = None,
+    y1: float | None = None,
+    search: str | None = None,
+    zoom: float = Query(2.0, ge=1.0, le=4.0),
+) -> Response:
+    """指定ページを画像にレンダリングし、bbox or 検索ヒットを枠で強調して返す。"""
+    pdf_path = _uploaded_pdf_path(project_id, role)
+    doc = fitz.open(pdf_path)
+    try:
+        if page > doc.page_count:
+            raise HTTPException(400, f"ページ {page} はPDFの範囲外です (max {doc.page_count})")
+        pg = doc.load_page(page - 1)
+
+        rects: list[fitz.Rect] = []
+        if x0 is not None and y0 is not None and x1 is not None and y1 is not None:
+            rects.append(fitz.Rect(x0, y0, x1, y1))
+        elif search:
+            hits = pg.search_for(search)
+            # 範囲を少し膨らませる（前後行も含めて見やすく）
+            for r in hits:
+                rects.append(fitz.Rect(r.x0 - 10, r.y0 - 4, r.x1 + 80, r.y1 + 4))
+
+        # 枠線を描画（オレンジ、太線）。
+        # pdfplumber は回転後の表示座標、search_for は表示座標を返すが、
+        # draw_rect は未回転の PDF 座標を要求するため derotation を適用する。
+        derotate = pg.derotation_matrix
+        for r in rects:
+            pg.draw_rect(r * derotate, color=(1, 0.5, 0), width=2.5)
+
+        mat = fitz.Matrix(zoom, zoom)
+        pix = pg.get_pixmap(matrix=mat, alpha=False)
+        buf = io.BytesIO(pix.tobytes("png"))
+        return Response(content=buf.getvalue(), media_type="image/png")
+    finally:
+        doc.close()

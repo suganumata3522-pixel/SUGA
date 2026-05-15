@@ -44,3 +44,52 @@ th { background: #f3f4f6; }
 .diff-only { color: #6b7280; }
 .muted { color: #9ca3af; }
 .error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+
+button.link {
+  background: none;
+  color: #2563eb;
+  padding: 2px 6px;
+  border: 1px solid #93c5fd;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-right: 4px;
+  cursor: pointer;
+}
+button.link:hover { background: #eff6ff; }
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal {
+  background: #fff;
+  border-radius: 8px;
+  max-width: 95vw;
+  max-height: 95vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.modal-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.modal-header .close {
+  background: #f3f4f6;
+  color: #111827;
+  border: 1px solid #d1d5db;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.modal-body { overflow: auto; padding: 8px; }
+.modal-body img { display: block; max-width: 100%; }

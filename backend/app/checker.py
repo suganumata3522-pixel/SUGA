@@ -28,11 +28,20 @@ class FieldDiff(BaseModel):
     calc_value: str | None = None
 
 
+class Locator(BaseModel):
+    """元PDF内の位置情報。UI側がハイライトAPIに渡す。"""
+    page: int
+    bbox: tuple[float, float, float, float] | None = None
+    search: str | None = None  # bbox が無い時に使う検索語（通常は符号）
+
+
 class Diff(BaseModel):
     kind: DiffKind
     mark: str
     fields: list[FieldDiff] = []
     note: str | None = None  # 計算書側の備考（例: "1F 駐輪場・ENT"）など補助情報
+    drawing_loc: Locator | None = None
+    calc_loc: Locator | None = None
 
 
 def _aggregate_rebar(m: BeamMember, attr: str) -> set[str]:
@@ -45,6 +54,18 @@ def _aggregate_rebar(m: BeamMember, attr: str) -> set[str]:
     return out
 
 
+def _drawing_loc(d: BeamMember | None) -> Locator | None:
+    if d is None or d.location is None:
+        return None
+    return Locator(page=d.location.page, bbox=d.location.bbox, search=d.mark)
+
+
+def _calc_loc(c: BeamMember | None) -> Locator | None:
+    if c is None or c.location is None:
+        return None
+    return Locator(page=c.location.page, bbox=c.location.bbox, search=c.mark)
+
+
 def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
     d_map = {m.mark: m for m in drawing.members}
     c_map = {m.mark: m for m in calc.members}
@@ -52,7 +73,10 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
 
     for mark, d in d_map.items():
         if mark not in c_map:
-            diffs.append(Diff(kind=DiffKind.ONLY_IN_DRAWING, mark=mark, note=d.note))
+            diffs.append(Diff(
+                kind=DiffKind.ONLY_IN_DRAWING, mark=mark, note=d.note,
+                drawing_loc=_drawing_loc(d),
+            ))
             continue
         c = c_map[mark]
         # B 比較（両方に値がある場合のみ）
@@ -60,6 +84,7 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
             diffs.append(Diff(
                 kind=DiffKind.SECTION_B_MISMATCH, mark=mark, note=c.note,
                 fields=[FieldDiff(field="B", drawing_value=str(d.section.B), calc_value=str(c.section.B))],
+                drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
             ))
         # 配筋比較
         rebar_fields: list[FieldDiff] = []
@@ -73,10 +98,16 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
                     calc_value=" / ".join(sorted(cs)),
                 ))
         if rebar_fields:
-            diffs.append(Diff(kind=DiffKind.REBAR_MISMATCH, mark=mark, fields=rebar_fields, note=c.note))
+            diffs.append(Diff(
+                kind=DiffKind.REBAR_MISMATCH, mark=mark, fields=rebar_fields, note=c.note,
+                drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
+            ))
 
     for mark, c in c_map.items():
         if mark not in d_map:
-            diffs.append(Diff(kind=DiffKind.ONLY_IN_CALC, mark=mark, note=c.note))
+            diffs.append(Diff(
+                kind=DiffKind.ONLY_IN_CALC, mark=mark, note=c.note,
+                calc_loc=_calc_loc(c),
+            ))
 
     return diffs

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckResult, Project, createProject, listProjects, runCheck, uploadFile } from "./api";
+import { CheckResult, Diff, Locator, Project, createProject, highlightUrl, listProjects, runCheck, uploadFile } from "./api";
 
 const KIND_COLORS: Record<string, string> = {
   "図のみ": "diff-only",
@@ -8,7 +8,14 @@ const KIND_COLORS: Record<string, string> = {
   "配筋不一致": "diff-rebar",
 };
 
-const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;  // 計算書のみに現れがちな基礎部材
+const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;
+
+type HighlightTarget = {
+  projectId: number;
+  role: "drawing" | "calc";
+  loc: Locator;
+  mark: string;
+};
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -21,6 +28,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [hideFoundation, setHideFoundation] = useState(true);
   const [hideCalcOnly, setHideCalcOnly] = useState(false);
+  const [highlight, setHighlight] = useState<HighlightTarget | null>(null);
 
   useEffect(() => {
     listProjects().then(setProjects).catch((e) => setError(String(e)));
@@ -54,7 +62,7 @@ export default function App() {
     }
   };
 
-  const filteredDiffs = useMemo(() => {
+  const filteredDiffs = useMemo<Diff[]>(() => {
     if (!result) return [];
     return result.diffs.filter((d) => {
       if (hideFoundation && FOUNDATION_PREFIX.test(d.mark)) return false;
@@ -62,6 +70,11 @@ export default function App() {
       return true;
     });
   }, [result, hideFoundation, hideCalcOnly]);
+
+  const openHighlight = (role: "drawing" | "calc", loc: Locator | null | undefined, mark: string) => {
+    if (!loc || !current) return;
+    setHighlight({ projectId: current.id, role, loc, mark });
+  };
 
   return (
     <div className="container">
@@ -125,7 +138,7 @@ export default function App() {
             </label>
           </div>
           <table>
-            <thead><tr><th>種別</th><th>符号</th><th>備考(計算書)</th><th>差分</th></tr></thead>
+            <thead><tr><th>種別</th><th>符号</th><th>備考(計算書)</th><th>差分</th><th>PDF確認</th></tr></thead>
             <tbody>
               {filteredDiffs.map((d, i) => (
                 <tr key={i}>
@@ -140,10 +153,32 @@ export default function App() {
                       </div>
                     ))}
                   </td>
+                  <td>
+                    {d.drawing_loc && (
+                      <button className="link" onClick={() => openHighlight("drawing", d.drawing_loc, d.mark)}>図 p.{d.drawing_loc.page}</button>
+                    )}
+                    {d.calc_loc && (
+                      <button className="link" onClick={() => openHighlight("calc", d.calc_loc, d.mark)}>計算 p.{d.calc_loc.page}</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {highlight && (
+        <div className="modal-backdrop" onClick={() => setHighlight(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <b>{highlight.mark}</b> — {highlight.role === "drawing" ? "構造図" : "計算書"} p.{highlight.loc.page}
+              <button className="close" onClick={() => setHighlight(null)}>閉じる</button>
+            </div>
+            <div className="modal-body">
+              <img src={highlightUrl(highlight.projectId, highlight.role, highlight.loc)} alt={highlight.mark} />
+            </div>
+          </div>
         </div>
       )}
     </div>
