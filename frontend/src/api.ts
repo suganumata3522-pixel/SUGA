@@ -2,12 +2,17 @@ const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 export type Project = { id: number; name: string; created_at?: string };
 
+export type FieldDiff = {
+  field: string;
+  drawing_value: string | null;
+  calc_value: string | null;
+};
+
 export type Diff = {
-  kind: string;
-  category: string;
+  kind: string;     // "図のみ" / "計算書のみ" / "断面幅B不一致" / "配筋不一致"
   mark: string;
-  floor: string | null;
-  fields: { field: string; drawing_value: string | null; calc_value: string | null }[];
+  fields: FieldDiff[];
+  note?: string | null;  // 計算書の備考（例: "1F 駐輪場・ENT"）
 };
 
 export type CheckResult = {
@@ -37,9 +42,9 @@ export async function uploadFile(projectId: number, role: "drawing" | "calc", fi
   return r.json();
 }
 
-export async function runCheck(projectId: number, calcSoftware: "ss" | "structuresuite"): Promise<CheckResult> {
+export async function runCheck(projectId: number): Promise<CheckResult> {
   const fd = new FormData();
-  fd.append("calc_software", calcSoftware);
+  fd.append("calc_software", "structuresuite");
   const r = await fetch(`${BASE}/api/projects/${projectId}/check`, { method: "POST", body: fd });
   return r.json();
 }

@@ -28,3 +28,4 @@ backend/uploads/
 # Env
 .env
 .env.local
+tsconfig.tsbuildinfo

@@ -1,5 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CheckResult, Project, createProject, listProjects, runCheck, uploadFile } from "./api";
+
+const KIND_COLORS: Record<string, string> = {
+  "図のみ": "diff-only",
+  "計算書のみ": "diff-only",
+  "断面幅B不一致": "diff-section",
+  "配筋不一致": "diff-rebar",
+};
+
+const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;  // 計算書のみに現れがちな基礎部材
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -7,36 +16,57 @@ export default function App() {
   const [current, setCurrent] = useState<Project | null>(null);
   const [drawing, setDrawing] = useState<File | null>(null);
   const [calc, setCalc] = useState<File | null>(null);
-  const [software, setSoftware] = useState<"ss" | "structuresuite">("ss");
   const [result, setResult] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [hideFoundation, setHideFoundation] = useState(true);
+  const [hideCalcOnly, setHideCalcOnly] = useState(false);
 
-  useEffect(() => { listProjects().then(setProjects); }, []);
+  useEffect(() => {
+    listProjects().then(setProjects).catch((e) => setError(String(e)));
+  }, []);
 
   const handleCreate = async () => {
     if (!name) return;
-    const p = await createProject(name);
-    setName("");
-    setProjects(await listProjects());
-    setCurrent(p);
+    try {
+      const p = await createProject(name);
+      setName("");
+      setProjects(await listProjects());
+      setCurrent(p);
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const handleCheck = async () => {
     if (!current) return;
     setBusy(true);
+    setError(null);
     try {
       if (drawing) await uploadFile(current.id, "drawing", drawing);
       if (calc) await uploadFile(current.id, "calc", calc);
-      const r = await runCheck(current.id, software);
+      const r = await runCheck(current.id);
       setResult(r);
+    } catch (e) {
+      setError(String(e));
     } finally {
       setBusy(false);
     }
   };
 
+  const filteredDiffs = useMemo(() => {
+    if (!result) return [];
+    return result.diffs.filter((d) => {
+      if (hideFoundation && FOUNDATION_PREFIX.test(d.mark)) return false;
+      if (hideCalcOnly && d.kind === "計算書のみ") return false;
+      return true;
+    });
+  }, [result, hideFoundation, hideCalcOnly]);
+
   return (
     <div className="container">
-      <h1>SUGA - 構造図 / 計算書 整合チェック</h1>
+      <h1>SUGA - 構造図 / 計算書 整合チェック（RC小梁）</h1>
+      {error && <div className="card error">{error}</div>}
 
       <div className="card">
         <h2>プロジェクト</h2>
@@ -62,21 +92,17 @@ export default function App() {
         <div className="card">
           <h2>ファイルアップロード — {current.name}</h2>
           <div className="row">
-            <label>構造図PDF:
+            <label>構造図PDF（二次部材リスト）:
               <input type="file" accept="application/pdf" onChange={(e) => setDrawing(e.target.files?.[0] ?? null)} />
             </label>
           </div>
           <div className="row">
-            <label>計算書PDF:
+            <label>計算書PDF（StructureSuite 小梁）:
               <input type="file" accept="application/pdf" onChange={(e) => setCalc(e.target.files?.[0] ?? null)} />
             </label>
-            <label>計算ソフト:
-              <select value={software} onChange={(e) => setSoftware(e.target.value as "ss" | "structuresuite")}>
-                <option value="ss">SS7 / SS3</option>
-                <option value="structuresuite">StructureSuite</option>
-              </select>
-            </label>
-            <button onClick={handleCheck} disabled={busy || (!drawing && !calc)}>{busy ? "照合中..." : "整合チェック実行"}</button>
+            <button onClick={handleCheck} disabled={busy || (!drawing && !calc)}>
+              {busy ? "照合中..." : "整合チェック実行"}
+            </button>
           </div>
         </div>
       )}
@@ -84,19 +110,34 @@ export default function App() {
       {result && (
         <div className="card">
           <h2>結果</h2>
-          <p>図: {result.drawing_member_count} 部材 / 計算書: {result.calc_member_count} 部材 / 差分: <b>{result.diff_count}</b> 件</p>
+          <p>
+            構造図: <b>{result.drawing_member_count}</b> 部材 /
+            計算書: <b>{result.calc_member_count}</b> 部材 /
+            差分: <b>{result.diff_count}</b> 件
+            （表示中: <b>{filteredDiffs.length}</b> 件）
+          </p>
+          <div className="row">
+            <label><input type="checkbox" checked={hideFoundation} onChange={(e) => setHideFoundation(e.target.checked)} />
+              基礎部材（FB/FCG/FG…）を除外
+            </label>
+            <label><input type="checkbox" checked={hideCalcOnly} onChange={(e) => setHideCalcOnly(e.target.checked)} />
+              「計算書のみ」を除外
+            </label>
+          </div>
           <table>
-            <thead><tr><th>種別</th><th>分類</th><th>符号</th><th>階</th><th>差分</th></tr></thead>
+            <thead><tr><th>種別</th><th>符号</th><th>備考(計算書)</th><th>差分</th></tr></thead>
             <tbody>
-              {result.diffs.map((d, i) => (
+              {filteredDiffs.map((d, i) => (
                 <tr key={i}>
-                  <td className={`diff-kind ${d.kind.includes("断面") ? "diff-section" : d.kind.includes("配筋") ? "diff-rebar" : "diff-only"}`}>{d.kind}</td>
-                  <td>{d.category}</td>
-                  <td>{d.mark}</td>
-                  <td>{d.floor ?? "-"}</td>
+                  <td className={`diff-kind ${KIND_COLORS[d.kind] ?? ""}`}>{d.kind}</td>
+                  <td><b>{d.mark}</b></td>
+                  <td className="muted">{d.note ?? ""}</td>
                   <td>
+                    {d.fields.length === 0 && <span className="muted">—</span>}
                     {d.fields.map((f, j) => (
-                      <div key={j}><code>{f.field}</code>: 図 <b>{f.drawing_value ?? "-"}</b> / 計算 <b>{f.calc_value ?? "-"}</b></div>
+                      <div key={j}>
+                        <code>{f.field}</code>: 図 <b>{f.drawing_value ?? "—"}</b> / 計算 <b>{f.calc_value ?? "—"}</b>
+                      </div>
                     ))}
                   </td>
                 </tr>

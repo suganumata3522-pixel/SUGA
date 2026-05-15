@@ -42,3 +42,5 @@ th { background: #f3f4f6; }
 .diff-section { color: #b45309; }
 .diff-rebar { color: #b91c1c; }
 .diff-only { color: #6b7280; }
+.muted { color: #9ca3af; }
+.error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }

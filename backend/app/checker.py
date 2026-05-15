@@ -32,6 +32,7 @@ class Diff(BaseModel):
     kind: DiffKind
     mark: str
     fields: list[FieldDiff] = []
+    note: str | None = None  # 計算書側の備考（例: "1F 駐輪場・ENT"）など補助情報
 
 
 def _aggregate_rebar(m: BeamMember, attr: str) -> set[str]:
@@ -51,13 +52,13 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
 
     for mark, d in d_map.items():
         if mark not in c_map:
-            diffs.append(Diff(kind=DiffKind.ONLY_IN_DRAWING, mark=mark))
+            diffs.append(Diff(kind=DiffKind.ONLY_IN_DRAWING, mark=mark, note=d.note))
             continue
         c = c_map[mark]
         # B 比較（両方に値がある場合のみ）
         if d.section.B is not None and c.section.B is not None and d.section.B != c.section.B:
             diffs.append(Diff(
-                kind=DiffKind.SECTION_B_MISMATCH, mark=mark,
+                kind=DiffKind.SECTION_B_MISMATCH, mark=mark, note=c.note,
                 fields=[FieldDiff(field="B", drawing_value=str(d.section.B), calc_value=str(c.section.B))],
             ))
         # 配筋比較
@@ -72,10 +73,10 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
                     calc_value=" / ".join(sorted(cs)),
                 ))
         if rebar_fields:
-            diffs.append(Diff(kind=DiffKind.REBAR_MISMATCH, mark=mark, fields=rebar_fields))
+            diffs.append(Diff(kind=DiffKind.REBAR_MISMATCH, mark=mark, fields=rebar_fields, note=c.note))
 
     for mark, c in c_map.items():
         if mark not in d_map:
-            diffs.append(Diff(kind=DiffKind.ONLY_IN_CALC, mark=mark))
+            diffs.append(Diff(kind=DiffKind.ONLY_IN_CALC, mark=mark, note=c.note))
 
     return diffs
