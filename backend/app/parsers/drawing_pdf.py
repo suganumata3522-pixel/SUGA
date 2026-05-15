@@ -21,7 +21,7 @@ import pdfplumber
 from ..models import BeamMember, LocationHint, MemberSet, PositionRebar, Section, Source
 from .base import Parser
 
-_MARK_RE = re.compile(r"^(?:B|CG|WCB)\d+[A-Z]?$")
+_MARK_RE = re.compile(r"^(?:B|CG|WCB|FB|FCG|FG)\d+[A-Z]?$")
 # 主筋径は D10/D13/D16/D19/D22/D25/D29/D32/D35/D38/D41 を許容
 _BAR_SIZE = r"(?:10|13|16|19|22|25|29|32|35|38|41)"
 _REBAR_RE = re.compile(rf"\d+(?:/\d+)?-D{_BAR_SIZE}(?:@\d+)?")
