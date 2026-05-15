@@ -12,7 +12,9 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from .models import BeamMember, MemberSet
+import re
+
+from .models import BeamMember, MemberSet, SlabMember, SlabSet
 
 
 class DiffKind(str, Enum):
@@ -21,6 +23,8 @@ class DiffKind(str, Enum):
     SECTION_B_MISMATCH = "断面幅B不一致"
     REBAR_MISMATCH = "配筋不一致"
     NEEDS_REVIEW = "要目視確認"
+    SLAB_THICKNESS_MISMATCH = "スラブ厚不一致"
+    SLAB_REBAR_MISMATCH = "スラブ配筋不一致"
 
 
 class Locator(BaseModel):
@@ -138,5 +142,84 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
                 kind=DiffKind.ONLY_IN_CALC, mark=mark, note=c.note,
                 calc_loc=_calc_loc(c),
             ))
+
+    return diffs
+
+
+# ---------------------------------------------------------------------------
+# スラブの整合チェック
+# ---------------------------------------------------------------------------
+def _slab_loc(s: SlabMember | None, key: str | None = None) -> Locator | None:
+    if s is None or s.location is None:
+        return None
+    bbox = s.field_bboxes.get(key) if key else s.location.bbox
+    return Locator(page=s.location.page, bbox=bbox or s.location.bbox, search=s.mark)
+
+
+def _thickness_range(raw: str | None, fallback: int | None) -> tuple[int, int] | None:
+    """スラブ厚表記から (min, max) を返す。"260〜260"->(260,260), "315〜285"->(285,315)。"""
+    if raw:
+        nums = [int(n) for n in re.findall(r"\d+", raw)]
+        if nums:
+            return (min(nums), max(nums))
+    if fallback is not None:
+        return (fallback, fallback)
+    return None
+
+
+def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
+    """スラブの整合チェック。
+
+    - スラブ厚: 構造図がテーパー範囲 (例 315〜285) の場合、計算書値が範囲内なら一致とみなす
+    - 配筋: 構造図2値(主筋/配力筋方向) vs 計算書4値(端部/中央×短辺/長辺) で粒度が
+      異なるため、順不同の集合として比較する
+    """
+    d_map = {s.mark: s for s in drawing.slabs}
+    c_map = {s.mark: s for s in calc.slabs}
+    diffs: list[Diff] = []
+
+    for mark, d in d_map.items():
+        if mark not in c_map:
+            diffs.append(Diff(kind=DiffKind.ONLY_IN_DRAWING, mark=mark, drawing_loc=_slab_loc(d)))
+            continue
+        c = c_map[mark]
+
+        # スラブ厚
+        d_rng = _thickness_range(d.thickness_raw, d.thickness)
+        if d_rng and c.thickness is not None:
+            lo, hi = d_rng
+            if not (lo <= c.thickness <= hi):
+                d_disp = d.thickness_raw or str(d.thickness)
+                diffs.append(Diff(
+                    kind=DiffKind.SLAB_THICKNESS_MISMATCH, mark=mark,
+                    fields=[FieldDiff(
+                        field="スラブ厚", drawing_value=d_disp, calc_value=f"{c.thickness}",
+                        drawing_loc=_slab_loc(d, "thickness"), calc_loc=_slab_loc(c),
+                    )],
+                    drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+                ))
+
+        # 配筋（集合比較）
+        rebar_fields: list[FieldDiff] = []
+        for attr, label, key in [("top_rebar", "上端筋", "top"), ("bottom_rebar", "下端筋", "bottom")]:
+            ds = {v.replace(" ", "") for v in getattr(d, attr)}
+            cs = {v.replace(" ", "") for v in getattr(c, attr)}
+            if ds and cs and ds != cs:
+                rebar_fields.append(FieldDiff(
+                    field=label,
+                    drawing_value=" / ".join(sorted(ds)),
+                    calc_value=" / ".join(sorted(cs)),
+                    drawing_loc=_slab_loc(d, key),
+                    calc_loc=_slab_loc(c),
+                ))
+        if rebar_fields:
+            diffs.append(Diff(
+                kind=DiffKind.SLAB_REBAR_MISMATCH, mark=mark, fields=rebar_fields,
+                drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+            ))
+
+    for mark, c in c_map.items():
+        if mark not in d_map:
+            diffs.append(Diff(kind=DiffKind.ONLY_IN_CALC, mark=mark, calc_loc=_slab_loc(c)))
 
     return diffs

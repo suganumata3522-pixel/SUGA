@@ -11,11 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from sqlmodel import select
 
-from .checker import Diff, compare
+from .checker import Diff, compare, compare_slabs
 from .config import UPLOAD_DIR
 from .db import Project, UploadedFile, get_session, init_db
 from .models import MemberSet
-from .parsers import DrawingPdfParser, StructureSuitePdfParser
+from .parsers import DrawingPdfParser, StructureSuitePdfParser, parse_calc_slabs, parse_drawing_slabs
 
 app = FastAPI(title="SUGA - 構造図/計算書整合チェック", version="0.1.0")
 
@@ -94,11 +94,21 @@ def run_check(project_id: int, calc_software: str = Form("ss")) -> dict:
     _ = calc_software  # 将来 SS7/SS3 を実装したら分岐
 
     diffs: list[Diff] = compare(drawing_set, calc_set)
+
+    # スラブの整合チェック
+    drawing_slabs = parse_drawing_slabs(Path(drawing.stored_path))
+    calc_slabs = parse_calc_slabs(Path(calc.stored_path))
+    slab_diffs: list[Diff] = compare_slabs(drawing_slabs, calc_slabs)
+
     return {
         "drawing_member_count": len(drawing_set.members),
         "calc_member_count": len(calc_set.members),
         "diff_count": len(diffs),
         "diffs": [d.model_dump() for d in diffs],
+        "drawing_slab_count": len(drawing_slabs.slabs),
+        "calc_slab_count": len(calc_slabs.slabs),
+        "slab_diff_count": len(slab_diffs),
+        "slab_diffs": [d.model_dump() for d in slab_diffs],
     }
 
 

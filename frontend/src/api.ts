@@ -30,6 +30,10 @@ export type CheckResult = {
   calc_member_count: number;
   diff_count: number;
   diffs: Diff[];
+  drawing_slab_count: number;
+  calc_slab_count: number;
+  slab_diff_count: number;
+  slab_diffs: Diff[];
 };
 
 export function highlightUrl(projectId: number, role: "drawing" | "calc", loc: Locator): string {

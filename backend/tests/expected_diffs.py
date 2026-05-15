@@ -47,3 +47,19 @@ EXPECTED: dict[str, dict] = {
         },
     },
 }
+
+# スラブ整合チェックのゴールデン値。
+# tests/fixtures/<案件名>/{drawing.pdf, calc.pdf} を parse_drawing_slabs /
+# parse_calc_slabs にかけ、compare_slabs の (kind, mark) を比較する。
+EXPECTED_SLAB: dict[str, dict] = {
+    "project3_slab": {
+        "drawing_slab_count": 20,
+        "calc_slab_count": 19,
+        "diff_keys": {
+            ("スラブ配筋不一致", "S25A"),
+            ("図のみ", "CS25A"),
+            ("図のみ", "CS30"),
+            ("計算書のみ", "CS21A"),
+        },
+    },
+}

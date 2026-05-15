@@ -7,6 +7,8 @@ const KIND_COLORS: Record<string, string> = {
   "断面幅B不一致": "diff-section",
   "配筋不一致": "diff-rebar",
   "要目視確認": "diff-review",
+  "スラブ厚不一致": "diff-section",
+  "スラブ配筋不一致": "diff-rebar",
 };
 
 const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;
@@ -129,7 +131,7 @@ export default function App() {
 
       {result && (
         <div className="card">
-          <h2>結果</h2>
+          <h2>結果 — 小梁</h2>
           <p>
             構造図: <b>{result.drawing_member_count}</b> 部材 /
             計算書: <b>{result.calc_member_count}</b> 部材 /
@@ -150,46 +152,19 @@ export default function App() {
               「計算書のみ」を除外
             </label>
           </div>
-          <table>
-            <thead><tr><th>種別</th><th>符号</th><th>備考(計算書)</th><th>差分</th></tr></thead>
-            <tbody>
-              {filteredDiffs.map((d, i) => (
-                <tr key={i}>
-                  <td className={`diff-kind ${KIND_COLORS[d.kind] ?? ""}`}>{d.kind}</td>
-                  <td>
-                    <b>{d.mark}</b>
-                    {d.fields.length === 0 && (
-                      <div className="row" style={{ marginTop: 4 }}>
-                        {d.drawing_loc && (
-                          <button className="link" onClick={() => openHighlight("drawing", d.drawing_loc!, d.mark)}>図 p.{d.drawing_loc.page}</button>
-                        )}
-                        {d.calc_loc && (
-                          <button className="link" onClick={() => openHighlight("calc", d.calc_loc!, d.mark)}>計算 p.{d.calc_loc.page}</button>
-                        )}
-                      </div>
-                    )}
-                  </td>
-                  <td className="muted">{d.note ?? ""}</td>
-                  <td>
-                    {d.fields.length === 0 && <span className="muted">—</span>}
-                    {d.fields.map((f, j) => (
-                      <div key={j} className="field-diff">
-                        <code>{f.field}</code>: 図 <b>{f.drawing_value ?? "—"}</b> / 計算 <b>{f.calc_value ?? "—"}</b>
-                        <span className="field-actions">
-                          {f.drawing_loc && (
-                            <button className="link" onClick={() => openHighlight("drawing", f.drawing_loc!, `${d.mark} / ${f.field}`)}>図</button>
-                          )}
-                          {f.calc_loc && (
-                            <button className="link" onClick={() => openHighlight("calc", f.calc_loc!, `${d.mark} / ${f.field}`)}>計算</button>
-                          )}
-                        </span>
-                      </div>
-                    ))}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <DiffTable diffs={filteredDiffs} onHighlight={openHighlight} />
+        </div>
+      )}
+
+      {result && (
+        <div className="card">
+          <h2>結果 — スラブ</h2>
+          <p>
+            構造図: <b>{result.drawing_slab_count}</b> 枚 /
+            計算書: <b>{result.calc_slab_count}</b> 枚 /
+            差分: <b>{result.slab_diff_count}</b> 件
+          </p>
+          <DiffTable diffs={result.slab_diffs} onHighlight={openHighlight} />
         </div>
       )}
 
@@ -207,5 +182,59 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+}
+
+function DiffTable({
+  diffs,
+  onHighlight,
+}: {
+  diffs: Diff[];
+  onHighlight: (role: "drawing" | "calc", loc: Locator | null | undefined, mark: string) => void;
+}) {
+  if (diffs.length === 0) {
+    return <p className="muted">差分なし</p>;
+  }
+  return (
+    <table>
+      <thead><tr><th>種別</th><th>符号</th><th>備考(計算書)</th><th>差分</th></tr></thead>
+      <tbody>
+        {diffs.map((d, i) => (
+          <tr key={i}>
+            <td className={`diff-kind ${KIND_COLORS[d.kind] ?? ""}`}>{d.kind}</td>
+            <td>
+              <b>{d.mark}</b>
+              {d.fields.length === 0 && (
+                <div className="row" style={{ marginTop: 4 }}>
+                  {d.drawing_loc && (
+                    <button className="link" onClick={() => onHighlight("drawing", d.drawing_loc!, d.mark)}>図 p.{d.drawing_loc.page}</button>
+                  )}
+                  {d.calc_loc && (
+                    <button className="link" onClick={() => onHighlight("calc", d.calc_loc!, d.mark)}>計算 p.{d.calc_loc.page}</button>
+                  )}
+                </div>
+              )}
+            </td>
+            <td className="muted">{d.note ?? ""}</td>
+            <td>
+              {d.fields.length === 0 && <span className="muted">—</span>}
+              {d.fields.map((f, j) => (
+                <div key={j} className="field-diff">
+                  <code>{f.field}</code>: 図 <b>{f.drawing_value ?? "—"}</b> / 計算 <b>{f.calc_value ?? "—"}</b>
+                  <span className="field-actions">
+                    {f.drawing_loc && (
+                      <button className="link" onClick={() => onHighlight("drawing", f.drawing_loc!, `${d.mark} / ${f.field}`)}>図</button>
+                    )}
+                    {f.calc_loc && (
+                      <button className="link" onClick={() => onHighlight("calc", f.calc_loc!, `${d.mark} / ${f.field}`)}>計算</button>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

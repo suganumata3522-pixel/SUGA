@@ -65,3 +65,32 @@ class MemberSet(BaseModel):
     source: Source
     file_name: str
     members: list[BeamMember] = Field(default_factory=list)
+
+
+class SlabMember(BaseModel):
+    """RCスラブ1枚（符号単位）。
+
+    構造図のスラブリストは「主筋方向 / 配力筋方向」の2値、
+    計算書は「短辺端部 / 短辺中央 / 長辺端部 / 長辺中央」の4値で配筋を持つ。
+    方向の対応（主筋方向=短辺方向、配力筋方向=長辺方向）が崩れやすいため、
+    配筋は順不同の集合として比較する。
+    """
+    mark: str = Field(..., description="スラブ符号 例: S18, CS26, S25A")
+    thickness: Optional[int] = None        # 代表スラブ厚 (mm)
+    thickness_raw: Optional[str] = None    # 元表記 例 "180" / "260〜260" / "210〜180"
+    top_rebar: list[str] = Field(default_factory=list)     # 上端筋（重複除去前の値群）
+    bottom_rebar: list[str] = Field(default_factory=list)  # 下端筋
+    concrete_grade: Optional[str] = None   # 例 "Fc36"（計算書側のみ）
+    support: Optional[str] = None          # 支持条件（計算書側のみ）例 "四辺固定" "片持ち版"
+    source: Source
+    location: Optional[LocationHint] = None
+    field_bboxes: dict[str, tuple[float, float, float, float]] = Field(default_factory=dict)
+    note: Optional[str] = None
+
+
+class SlabSet(BaseModel):
+    """スラブのパース結果コンテナ。"""
+    source: Source
+    file_name: str
+    slabs: list[SlabMember] = Field(default_factory=list)
+
