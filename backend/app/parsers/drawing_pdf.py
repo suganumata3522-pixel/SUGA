@@ -21,7 +21,7 @@ import pdfplumber
 from ..models import BeamMember, LocationHint, MemberSet, PositionRebar, Section, Source
 from .base import Parser
 
-_MARK_RE = re.compile(r"^(?:B|CG|WCB|FB|FCG|FG)\d+[A-Z]?$")
+_MARK_RE = re.compile(r"^(?:B|CB|CG|WB|WCB|FB|FCG|FG)\d+[A-Z]?$")
 # 主筋径は D10/D13/D16/D19/D22/D25/D29/D32/D35/D38/D41 を許容
 _BAR_SIZE = r"(?:10|13|16|19|22|25|29|32|35|38|41)"
 _REBAR_RE = re.compile(rf"\d+(?:/\d+)?-D{_BAR_SIZE}(?:@\d+)?")
@@ -75,13 +75,28 @@ def _column_bounds(mark_words: list[dict], all_marks_x: list[float]) -> list[tup
 
 
 def _collect_at_y(words: list[dict], y_center: float, x_lo: float, x_hi: float, tol: float = 5.0) -> list[dict]:
-    """指定したセル領域内、y_center ± tol の語を x 昇順で返す。"""
+    """指定したセル領域内、y_center ± tol の語を x 昇順で返す。
+    隣接セルから漏れ込んだ "-D??" だけの孤立トークン（直前に数値語が無いもの）は除去する。
+    """
     out = [
         w for w in words
         if x_lo <= w["x0"] < x_hi and abs(float(w["top"]) - y_center) <= tol
     ]
     out.sort(key=lambda w: w["x0"])
-    return out
+    if not out:
+        return out
+    filtered: list[dict] = []
+    for i, w in enumerate(out):
+        t = w["text"]
+        if t.startswith("-D"):
+            # 直前語が数値（"3", "3/3" など）で、x 距離が近ければ正当
+            if filtered and re.match(r"^\d+(?:/\d+)?$", filtered[-1]["text"]) and \
+               (float(w["x0"]) - float(filtered[-1]["x0"]) - len(filtered[-1]["text"]) * 4) < 12:
+                filtered.append(w)
+            # else: orphan, drop
+        else:
+            filtered.append(w)
+    return filtered
 
 
 def _join_words(ws: list[dict]) -> str:
@@ -236,9 +251,19 @@ class DrawingPdfParser(Parser):
         return out
 
     def _extract_positions(self, words, grp, x_lo, x_hi) -> list[PositionRebar]:
-        # 位置ラベル → サブ列数と分割アンカーを決める
+        # 位置ラベル → サブ列数と分割アンカーを決める。
+        # 位置ラベルは長いことが多く、語の左端 (x0) はセル境界をまたぐが
+        # 中央 ((x0+x1)/2) で見れば自セルに収まるケースが多い。
         pos_y = grp.get("位置")
-        loc_words = _collect_at_y(words, pos_y, x_lo, x_hi, tol=4) if pos_y is not None else []
+        loc_words: list[dict] = []
+        if pos_y is not None:
+            for w in words:
+                if abs(float(w["top"]) - pos_y) > 4:
+                    continue
+                cx = (float(w["x0"]) + float(w.get("x1", w["x0"] + 5))) / 2
+                if x_lo <= cx < x_hi:
+                    loc_words.append(w)
+            loc_words.sort(key=lambda w: float(w["x0"]))
         # 「中」「央」が分割されているケースは結合して 1 語扱い
         joined_locs: list[str] = []
         label_xs: list[float] = []
