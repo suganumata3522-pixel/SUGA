@@ -9,6 +9,8 @@ const KIND_COLORS: Record<string, string> = {
 };
 
 const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;
+const CANTILEVER_PREFIX = /^(?:CB|WCB)\d/;
+const WALLBEAM_PREFIX = /^(?:WB)\d/;
 
 type HighlightTarget = {
   projectId: number;
@@ -28,6 +30,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [hideFoundation, setHideFoundation] = useState(true);
   const [hideCalcOnly, setHideCalcOnly] = useState(false);
+  const [hideCantilever, setHideCantilever] = useState(false);
+  const [hideWallBeam, setHideWallBeam] = useState(false);
   const [highlight, setHighlight] = useState<HighlightTarget | null>(null);
 
   useEffect(() => {
@@ -66,10 +70,12 @@ export default function App() {
     if (!result) return [];
     return result.diffs.filter((d) => {
       if (hideFoundation && FOUNDATION_PREFIX.test(d.mark)) return false;
+      if (hideCantilever && CANTILEVER_PREFIX.test(d.mark)) return false;
+      if (hideWallBeam && WALLBEAM_PREFIX.test(d.mark)) return false;
       if (hideCalcOnly && d.kind === "計算書のみ") return false;
       return true;
     });
-  }, [result, hideFoundation, hideCalcOnly]);
+  }, [result, hideFoundation, hideCantilever, hideWallBeam, hideCalcOnly]);
 
   const openHighlight = (role: "drawing" | "calc", loc: Locator | null | undefined, mark: string) => {
     if (!loc || !current) return;
@@ -131,7 +137,13 @@ export default function App() {
           </p>
           <div className="row">
             <label><input type="checkbox" checked={hideFoundation} onChange={(e) => setHideFoundation(e.target.checked)} />
-              基礎部材（FB/FCG/FG…）を除外
+              基礎部材（FB/FCG/FG）を除外
+            </label>
+            <label><input type="checkbox" checked={hideCantilever} onChange={(e) => setHideCantilever(e.target.checked)} />
+              片持小梁（CB/WCB）を除外
+            </label>
+            <label><input type="checkbox" checked={hideWallBeam} onChange={(e) => setHideWallBeam(e.target.checked)} />
+              壁梁（WB）を除外
             </label>
             <label><input type="checkbox" checked={hideCalcOnly} onChange={(e) => setHideCalcOnly(e.target.checked)} />
               「計算書のみ」を除外

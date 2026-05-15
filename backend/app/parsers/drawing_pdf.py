@@ -251,38 +251,58 @@ class DrawingPdfParser(Parser):
         return out
 
     def _extract_positions(self, words, grp, x_lo, x_hi) -> list[PositionRebar]:
-        # 位置ラベル → サブ列数と分割アンカーを決める。
-        # 位置ラベルは長いことが多く、語の左端 (x0) はセル境界をまたぐが
-        # 中央 ((x0+x1)/2) で見れば自セルに収まるケースが多い。
+        # 戦略:
+        # 1) 上端筋の行に並ぶ鉄筋ペア（"N(-D??)" or "N/N(-D??)" の対）の中心 x を
+        #    サブ位置の基準とする。鉄筋値は位置ラベルと違って密に書かれるため
+        #    クラスタ数 = サブ位置数として信頼できる。
+        # 2) 各サブ位置に最も近い位置ラベル（ページ行全体から）を割り当てる。
+        # 3) STP/腹筋など 1 値で全位置を覆うケースも兼用。
+        top_y = grp.get("上端筋")
+        rebar_centers: list[float] = []
+        if top_y is not None:
+            top_ws = _collect_at_y(words, top_y, x_lo, x_hi, tol=4)
+            i = 0
+            while i < len(top_ws):
+                w = top_ws[i]
+                if re.match(r"^\d+(?:/\d+)?$", w["text"]) and i + 1 < len(top_ws) and top_ws[i + 1]["text"].startswith("-D"):
+                    nxt = top_ws[i + 1]
+                    cx = (float(w["x0"]) + float(nxt.get("x1", nxt["x0"] + 8))) / 2
+                    rebar_centers.append(cx)
+                    i += 2
+                else:
+                    i += 1
+        n_sub = max(1, len(rebar_centers))
+
+        # 位置ラベルはページ全体の 位置 行から取得（中・央 結合）
         pos_y = grp.get("位置")
-        loc_words: list[dict] = []
+        pos_labels: list[tuple[float, str]] = []
         if pos_y is not None:
-            for w in words:
-                if abs(float(w["top"]) - pos_y) > 4:
+            row = [w for w in words if abs(float(w["top"]) - pos_y) <= 4 and w["text"] != "位置"]
+            row.sort(key=lambda w: float(w["x0"]))
+            skip = False
+            for k, w in enumerate(row):
+                if skip:
+                    skip = False
                     continue
-                cx = (float(w["x0"]) + float(w.get("x1", w["x0"] + 5))) / 2
-                if x_lo <= cx < x_hi:
-                    loc_words.append(w)
-            loc_words.sort(key=lambda w: float(w["x0"]))
-        # 「中」「央」が分割されているケースは結合して 1 語扱い
-        joined_locs: list[str] = []
-        label_xs: list[float] = []
-        skip = False
-        for k, w in enumerate(loc_words):
-            if skip:
-                skip = False
-                continue
-            if w["text"] == "中" and k + 1 < len(loc_words) and loc_words[k + 1]["text"] == "央":
-                joined_locs.append("中央")
-                label_xs.append((float(w["x0"]) + float(loc_words[k + 1]["x0"])) / 2)
-                skip = True
-            else:
-                joined_locs.append(w["text"])
-                label_xs.append(float(w["x0"]))
-        n_sub = max(1, len(joined_locs))
-        loc_parts = joined_locs if joined_locs else [""]
-        # サブ列分割境界 = ラベル間の中点
-        sub_breaks = [(label_xs[i] + label_xs[i + 1]) / 2 for i in range(n_sub - 1)] if n_sub > 1 else []
+                if w["text"] == "中" and k + 1 < len(row) and row[k + 1]["text"] == "央":
+                    cx = (float(w["x0"]) + float(row[k + 1].get("x1", row[k + 1]["x0"] + 6))) / 2
+                    pos_labels.append((cx, "中央"))
+                    skip = True
+                else:
+                    cx = (float(w["x0"]) + float(w.get("x1", w["x0"] + 6))) / 2
+                    pos_labels.append((cx, w["text"]))
+
+        # 各サブ位置に最も近いラベルを割り当て（ラベルは重複利用可）
+        def _pick_label(sc: float) -> str:
+            if not pos_labels:
+                return ""
+            best = min(pos_labels, key=lambda l: abs(l[0] - sc))
+            return best[1]
+
+        sub_locations = [_pick_label(sc) for sc in rebar_centers] if rebar_centers else [""]
+
+        # サブ列分割境界 = 連続するサブ位置中心の中点
+        sub_breaks = [(rebar_centers[i] + rebar_centers[i + 1]) / 2 for i in range(len(rebar_centers) - 1)]
 
         def _row_parts(label: str) -> list[str]:
             y = grp.get(label)
@@ -291,13 +311,11 @@ class DrawingPdfParser(Parser):
             ws = _collect_at_y(words, y, x_lo, x_hi, tol=4)
             if not ws:
                 return []
-            # 配筋トークン数がサブ列数を満たさなければ 1 列扱い（共通値）
             joined = _join_words(ws)
             n_tokens = len(_REBAR_RE.findall(joined))
             breaks = sub_breaks if n_tokens >= n_sub else []
             parts = _split_by_breaks(ws, breaks)
             normalized = [self._normalize_rebar(p) for p in parts]
-            # 共通値ケース（actual_sub=1, n_sub>1）は全位置にコピー
             if not breaks and n_sub > 1 and normalized:
                 normalized = [normalized[0]] * n_sub
             return normalized
@@ -307,7 +325,7 @@ class DrawingPdfParser(Parser):
         stp_parts = _row_parts("STP")
         web_parts = _row_parts("腹筋")
 
-        n = max(len(loc_parts), len(top_parts), len(bot_parts), len(stp_parts), len(web_parts), 1)
+        n = max(len(sub_locations), len(top_parts), len(bot_parts), len(stp_parts), len(web_parts), 1)
 
         def _pick(parts: list[str], k: int) -> str | None:
             if not parts:
@@ -319,7 +337,7 @@ class DrawingPdfParser(Parser):
         positions: list[PositionRebar] = []
         for k in range(n):
             positions.append(PositionRebar(
-                location=_pick(loc_parts, k) or "",
+                location=_pick(sub_locations, k) or "",
                 top=_pick(top_parts, k),
                 bottom=_pick(bot_parts, k),
                 stirrup=_pick(stp_parts, k),
