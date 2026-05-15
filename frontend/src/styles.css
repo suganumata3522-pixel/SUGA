@@ -57,6 +57,9 @@ button.link {
 }
 button.link:hover { background: #eff6ff; }
 
+.field-diff { padding: 2px 0; }
+.field-diff .field-actions { margin-left: 8px; display: inline-flex; gap: 4px; }
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

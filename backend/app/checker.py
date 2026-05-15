@@ -22,12 +22,6 @@ class DiffKind(str, Enum):
     REBAR_MISMATCH = "配筋不一致"
 
 
-class FieldDiff(BaseModel):
-    field: str
-    drawing_value: str | None = None
-    calc_value: str | None = None
-
-
 class Locator(BaseModel):
     """元PDF内の位置情報。UI側がハイライトAPIに渡す。"""
     page: int
@@ -35,12 +29,20 @@ class Locator(BaseModel):
     search: str | None = None  # bbox が無い時に使う検索語（通常は符号）
 
 
+class FieldDiff(BaseModel):
+    field: str
+    drawing_value: str | None = None
+    calc_value: str | None = None
+    drawing_loc: Locator | None = None  # フィールド単位のハイライト
+    calc_loc: Locator | None = None
+
+
 class Diff(BaseModel):
     kind: DiffKind
     mark: str
     fields: list[FieldDiff] = []
     note: str | None = None  # 計算書側の備考（例: "1F 駐輪場・ENT"）など補助情報
-    drawing_loc: Locator | None = None
+    drawing_loc: Locator | None = None  # メンバ全体（"図のみ" 等）のハイライト
     calc_loc: Locator | None = None
 
 
@@ -66,6 +68,16 @@ def _calc_loc(c: BeamMember | None) -> Locator | None:
     return Locator(page=c.location.page, bbox=c.location.bbox, search=c.mark)
 
 
+def _field_loc(m: BeamMember | None, key: str) -> Locator | None:
+    """フィールド単位の bbox。なければメンバ全体に fallback。"""
+    if m is None or m.location is None:
+        return None
+    bbox = m.field_bboxes.get(key)
+    if bbox is None:
+        return Locator(page=m.location.page, bbox=m.location.bbox, search=m.mark)
+    return Locator(page=m.location.page, bbox=bbox, search=m.mark)
+
+
 def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
     d_map = {m.mark: m for m in drawing.members}
     c_map = {m.mark: m for m in calc.members}
@@ -83,7 +95,10 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
         if d.section.B is not None and c.section.B is not None and d.section.B != c.section.B:
             diffs.append(Diff(
                 kind=DiffKind.SECTION_B_MISMATCH, mark=mark, note=c.note,
-                fields=[FieldDiff(field="B", drawing_value=str(d.section.B), calc_value=str(c.section.B))],
+                fields=[FieldDiff(
+                    field="B", drawing_value=str(d.section.B), calc_value=str(c.section.B),
+                    drawing_loc=_field_loc(d, "B"), calc_loc=_field_loc(c, "B"),
+                )],
                 drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
             ))
         # 配筋比較
@@ -96,6 +111,8 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
                     field=label,
                     drawing_value=" / ".join(sorted(ds)),
                     calc_value=" / ".join(sorted(cs)),
+                    drawing_loc=_field_loc(d, attr),
+                    calc_loc=_field_loc(c, attr),
                 ))
         if rebar_fields:
             diffs.append(Diff(

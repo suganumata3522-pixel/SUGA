@@ -88,21 +88,27 @@ def _join_words(ws: list[dict]) -> str:
     return "".join(w["text"] for w in ws)
 
 
-def _split_subcolumns(ws: list[dict], x_lo: float, x_hi: float, n_sub: int) -> list[str]:
-    """セル内の語を「位置サブ列」ごとに n_sub 個に分けて文字列化する。
-    n_sub=1 なら全部をまとめる。n_sub=2 なら中央で左/右に分ける。
+def _split_by_breaks(ws: list[dict], breaks: list[float]) -> list[str]:
+    """与えられた x 分割境界（昇順）でセル内の語を区切って文字列化する。
+    breaks=[] なら全部を 1 つにまとめる。breaks=[mid] なら2分割。
     """
     if not ws:
-        return []
-    if n_sub <= 1:
+        return [""] * (len(breaks) + 1)
+    if not breaks:
         return [_join_words(ws)]
-    x_mid = (x_lo + x_hi) / 2
-    left = [w for w in ws if w["x0"] < x_mid]
-    right = [w for w in ws if w["x0"] >= x_mid]
-    parts: list[str] = []
-    parts.append(_join_words(left))
-    parts.append(_join_words(right))
-    return parts
+    sorted_ws = sorted(ws, key=lambda w: float(w["x0"]))
+    parts: list[list[dict]] = [[] for _ in range(len(breaks) + 1)]
+    for w in sorted_ws:
+        x = float(w["x0"])
+        idx = 0
+        for i, b in enumerate(breaks):
+            if x < b:
+                idx = i
+                break
+        else:
+            idx = len(breaks)
+        parts[idx].append(w)
+    return [_join_words(p) for p in parts]
 
 
 class DrawingPdfParser(Parser):
@@ -180,6 +186,18 @@ class DrawingPdfParser(Parser):
             # ラベル列の文字は概ね 25pt 幅で終わるため少しマージンを取って 27pt にする。
             min_left = label_x0 + 27
             bounds = [(max(lo, min_left), hi) for (lo, hi) in bounds]
+            # 右端セル等で隣接が無いとき幅が暴走するのを抑える。
+            # 隣接マークの x 差の中央値 × 1.15 を最大幅とする。
+            mark_xs_sorted = sorted(mark_xs)
+            if len(mark_xs_sorted) >= 2:
+                diffs = sorted(mark_xs_sorted[i + 1] - mark_xs_sorted[i] for i in range(len(mark_xs_sorted) - 1))
+                median = diffs[len(diffs) // 2]
+                max_w = median * 1.15
+                new_bounds = []
+                for (lo, hi), mw in zip(bounds, sorted(mark_words, key=lambda w: float(w["x0"]))):
+                    mx = float(mw["x0"])
+                    new_bounds.append((lo, min(hi, mx + max_w)))
+                bounds = new_bounds
             mark_words_sorted = sorted(mark_words, key=lambda w: float(w["x0"]))
 
             # 各 mark ごとに位置・配筋などを拾う
@@ -187,6 +205,7 @@ class DrawingPdfParser(Parser):
                 positions = self._extract_positions(words, grp, x_lo, x_hi)
                 fc_code = self._extract_fc_code(words, grp, x_lo, x_hi)
                 B = self._extract_section_B(words, grp, x_lo, x_hi)
+                field_bboxes = self._field_bboxes(grp, x_lo, x_hi)
                 out.append(BeamMember(
                     mark=mw["text"],
                     section=Section(B=B, D=None),
@@ -194,18 +213,35 @@ class DrawingPdfParser(Parser):
                     fc_code=fc_code,
                     source=self.source,
                     location=LocationHint(page=page_idx, bbox=(x_lo, y_top, x_hi, y_bot)),
+                    field_bboxes=field_bboxes,
                 ))
         return out
 
+    @staticmethod
+    def _field_bboxes(grp: dict, x_lo: float, x_hi: float) -> dict[str, tuple[float, float, float, float]]:
+        """ラベル行 y 位置からフィールド単位の bbox を組み立てる。"""
+        out: dict[str, tuple[float, float, float, float]] = {}
+        spec = [
+            ("B", "断面", -3, 13),
+            ("top", "上端筋", -4, 9),
+            ("bottom", "下端筋", -4, 9),
+            ("stirrup", "STP", -4, 9),
+            ("web", "腹筋", -4, 9),
+        ]
+        for key, label, top_off, bot_off in spec:
+            y = grp.get(label)
+            if y is None:
+                continue
+            out[key] = (x_lo, y + top_off, x_hi, y + bot_off)
+        return out
+
     def _extract_positions(self, words, grp, x_lo, x_hi) -> list[PositionRebar]:
-        # 位置ラベル → サブ列数の決定権を持つ
+        # 位置ラベル → サブ列数と分割アンカーを決める
         pos_y = grp.get("位置")
         loc_words = _collect_at_y(words, pos_y, x_lo, x_hi, tol=4) if pos_y is not None else []
-        # 位置ラベルの個数（語数）でサブ列数を判定する。
-        # "全断面" は 1 語、"元端 先端" は 2 語、"SX2端 中央・終端" 等も 2 語。
-        n_sub = len(loc_words) if loc_words else 1
         # 「中」「央」が分割されているケースは結合して 1 語扱い
-        joined_locs = []
+        joined_locs: list[str] = []
+        label_xs: list[float] = []
         skip = False
         for k, w in enumerate(loc_words):
             if skip:
@@ -213,11 +249,15 @@ class DrawingPdfParser(Parser):
                 continue
             if w["text"] == "中" and k + 1 < len(loc_words) and loc_words[k + 1]["text"] == "央":
                 joined_locs.append("中央")
+                label_xs.append((float(w["x0"]) + float(loc_words[k + 1]["x0"])) / 2)
                 skip = True
             else:
                 joined_locs.append(w["text"])
+                label_xs.append(float(w["x0"]))
         n_sub = max(1, len(joined_locs))
         loc_parts = joined_locs if joined_locs else [""]
+        # サブ列分割境界 = ラベル間の中点
+        sub_breaks = [(label_xs[i] + label_xs[i + 1]) / 2 for i in range(n_sub - 1)] if n_sub > 1 else []
 
         def _row_parts(label: str) -> list[str]:
             y = grp.get(label)
@@ -226,14 +266,14 @@ class DrawingPdfParser(Parser):
             ws = _collect_at_y(words, y, x_lo, x_hi, tol=4)
             if not ws:
                 return []
-            # この行の配筋トークン数を数え、サブ列数を決定する
+            # 配筋トークン数がサブ列数を満たさなければ 1 列扱い（共通値）
             joined = _join_words(ws)
             n_tokens = len(_REBAR_RE.findall(joined))
-            actual_sub = n_sub if n_tokens >= n_sub else 1
-            parts = _split_subcolumns(ws, x_lo, x_hi, actual_sub)
+            breaks = sub_breaks if n_tokens >= n_sub else []
+            parts = _split_by_breaks(ws, breaks)
             normalized = [self._normalize_rebar(p) for p in parts]
-            # サブ列数 < n_sub のとき（共通値）、全位置に同じ値を入れる
-            if actual_sub == 1 and n_sub > 1 and normalized:
+            # 共通値ケース（actual_sub=1, n_sub>1）は全位置にコピー
+            if not breaks and n_sub > 1 and normalized:
                 normalized = [normalized[0]] * n_sub
             return normalized
 

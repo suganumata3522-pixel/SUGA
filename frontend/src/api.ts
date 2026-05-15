@@ -2,25 +2,34 @@ const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
 export type Project = { id: number; name: string; created_at?: string };
 
-export type FieldDiff = {
-  field: string;
-  drawing_value: string | null;
-  calc_value: string | null;
-};
-
 export type Locator = {
   page: number;
   bbox?: [number, number, number, number] | null;
   search?: string | null;
 };
 
+export type FieldDiff = {
+  field: string;
+  drawing_value: string | null;
+  calc_value: string | null;
+  drawing_loc?: Locator | null;
+  calc_loc?: Locator | null;
+};
+
 export type Diff = {
   kind: string;     // "図のみ" / "計算書のみ" / "断面幅B不一致" / "配筋不一致"
   mark: string;
   fields: FieldDiff[];
-  note?: string | null;  // 計算書の備考（例: "1F 駐輪場・ENT"）
+  note?: string | null;
   drawing_loc?: Locator | null;
   calc_loc?: Locator | null;
+};
+
+export type CheckResult = {
+  drawing_member_count: number;
+  calc_member_count: number;
+  diff_count: number;
+  diffs: Diff[];
 };
 
 export function highlightUrl(projectId: number, role: "drawing" | "calc", loc: Locator): string {
@@ -36,13 +45,6 @@ export function highlightUrl(projectId: number, role: "drawing" | "calc", loc: L
   if (loc.search) params.set("search", loc.search);
   return `${BASE}/api/projects/${projectId}/highlight?${params.toString()}`;
 }
-
-export type CheckResult = {
-  drawing_member_count: number;
-  calc_member_count: number;
-  diff_count: number;
-  diffs: Diff[];
-};
 
 export async function listProjects(): Promise<Project[]> {
   const r = await fetch(`${BASE}/api/projects`);

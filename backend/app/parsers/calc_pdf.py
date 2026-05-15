@@ -23,6 +23,8 @@ import pdfplumber
 from ..models import BeamMember, LocationHint, MemberSet, PositionRebar, Section, Source
 from .base import Parser
 
+__all__ = ["StructureSuitePdfParser", "SSCalcPdfParser"]
+
 _RE_BLOCK_HEADER = re.compile(r"No\.\d+_([^\s（(]+)\s*[（(]([^）)]*)[）)]")
 _RE_MATERIAL = re.compile(
     r"コンクリート\s*(Fc\d+).+?主筋\s*(SD\d+).+?ST\.?\s*(SD\d+)"
@@ -79,6 +81,8 @@ class StructureSuitePdfParser(Parser):
             for page_idx, page in enumerate(pdf.pages, start=1):
                 text = page.extract_text() or ""
                 lines = [ln.rstrip() for ln in text.splitlines()]
+                # 後でフィールド bbox を埋めるため、ページ毎の語も保持
+                page_words = page.extract_words(keep_blank_chars=False)
                 i = 0
                 while i < len(lines):
                     line = lines[i]
@@ -197,7 +201,89 @@ class StructureSuitePdfParser(Parser):
 
                     i += 1
 
+                # ページ単位で field_bboxes を補完
+                _attach_field_bboxes(members, page_words, page_idx)
+
         return MemberSet(source=self.source, file_name=pdf_path.name, members=members)
+
+
+def _group_lines(words: list[dict], tol: float = 2.0) -> list[tuple[float, list[dict]]]:
+    """y が近い語をグループ化して行に分ける。"""
+    if not words:
+        return []
+    sorted_w = sorted(words, key=lambda w: float(w["top"]))
+    rows: list[list[dict]] = []
+    cur_y = float(sorted_w[0]["top"])
+    cur: list[dict] = []
+    for w in sorted_w:
+        y = float(w["top"])
+        if abs(y - cur_y) <= tol:
+            cur.append(w)
+        else:
+            rows.append(cur)
+            cur = [w]
+            cur_y = y
+    if cur:
+        rows.append(cur)
+    return [(sum(float(w["top"]) for w in r) / len(r), sorted(r, key=lambda w: float(w["x0"]))) for r in rows]
+
+
+def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page_idx: int) -> None:
+    """断面計算ブロック（符号 X / 位置 / 断面 / 主筋 / 下 / ST.）から
+    各 mark のフィールド単位 bbox を抽出し、当該 mark のメンバに付与する。
+    """
+    rows = _group_lines(page_words, tol=2.0)
+    label_keys = {"位置": None, "断面": "B", "主筋": "top", "下": "bottom", "ST.": "stirrup"}
+
+    for ri, (y, row_words) in enumerate(rows):
+        if not row_words or row_words[0]["text"] != "符号":
+            continue
+        # マーク列を取得
+        mark_words = [w for w in row_words[1:] if re.match(r"^(?:B|CG|WCB|FB|FCG|FG)\d+[A-Z]?$", w["text"])]
+        if not mark_words:
+            continue
+        # 同一 mark が 2 個並ぶケース（"B1A B1A"）も含む。
+        # 各 mark のセル x 範囲は隣接 mark との中点。
+        mark_xs = sorted({float(w["x0"]) for w in mark_words})
+        # ラベル行を符号行の直後から収集（次の "符号" or "No." まで）
+        sub_label_y: dict[str, float] = {}
+        for rj in range(ri + 1, len(rows)):
+            y2, row2 = rows[rj]
+            first = row2[0]["text"]
+            if first in {"符号"} or first.startswith("No.") or first.startswith("断面計算"):
+                break
+            if first in label_keys and label_keys[first]:
+                sub_label_y.setdefault(label_keys[first], y2)
+            if all(k in sub_label_y for k in ("B", "top", "bottom", "stirrup")):
+                break
+
+        if not sub_label_y:
+            continue
+
+        # mark 列の x 範囲
+        col_ranges: list[tuple[str, float, float]] = []
+        marks_used = sorted(mark_words, key=lambda w: float(w["x0"]))
+        for k, mw in enumerate(marks_used):
+            x = float(mw["x0"])
+            if k + 1 < len(marks_used):
+                hi = (x + float(marks_used[k + 1]["x0"])) / 2
+            else:
+                hi = x + 130  # 最右セル: 130pt 程度
+            lo = x - 5
+            col_ranges.append((mw["text"], lo, hi))
+
+        # 同一ページで該当 mark のメンバに最初に bbox を付与（既に付与済みならスキップ）
+        for mark_text, x_lo, x_hi in col_ranges:
+            target = next((m for m in members if m.mark == mark_text and not m.field_bboxes), None)
+            if target is None:
+                # 既に bbox がある場合はスキップ（最初に登場したブロックを優先）
+                continue
+            field_bboxes: dict[str, tuple[float, float, float, float]] = {}
+            for key, ly in sub_label_y.items():
+                field_bboxes[key] = (x_lo, ly - 3, x_hi, ly + 10)
+            target.field_bboxes = field_bboxes
+            # location も最初の符号行に揃える
+            target.location = LocationHint(page=page_idx, bbox=(x_lo, y - 3, x_hi, max(sub_label_y.values()) + 14))
 
 
 # 後方互換用

@@ -49,6 +49,9 @@ class BeamMember(BaseModel):
     rebar_grade_stirrup: Optional[str] = None  # 例 "SD295"
     source: Source
     location: Optional[LocationHint] = None
+    # フィールド単位のハイライト用 bbox。キー: "B" / "top" / "bottom" / "stirrup" / "web"
+    # 値: (x0, y0, x1, y1) 表示座標 (pdfplumber 互換)
+    field_bboxes: dict[str, tuple[float, float, float, float]] = Field(default_factory=dict)
     note: Optional[str] = None  # 計算書の備考 (例: "1F 駐輪場・ENT")
 
 
