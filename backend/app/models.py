@@ -53,6 +53,11 @@ class BeamMember(BaseModel):
     # 値: (x0, y0, x1, y1) 表示座標 (pdfplumber 互換)
     field_bboxes: dict[str, tuple[float, float, float, float]] = Field(default_factory=dict)
     note: Optional[str] = None  # 計算書の備考 (例: "1F 駐輪場・ENT")
+    # 構造図側のレイアウト都合で完全抽出が困難な場合のフラグ
+    # 例: 外端/中央/連続端 の 3 位置のうち、3 番目が物理的に隣セル領域に
+    # 配置されているケース
+    needs_review: bool = False
+    review_note: Optional[str] = None
 
 
 class MemberSet(BaseModel):

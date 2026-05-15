@@ -6,6 +6,7 @@ const KIND_COLORS: Record<string, string> = {
   "計算書のみ": "diff-only",
   "断面幅B不一致": "diff-section",
   "配筋不一致": "diff-rebar",
+  "要目視確認": "diff-review",
 };
 
 const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;

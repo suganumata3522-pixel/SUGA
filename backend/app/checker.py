@@ -20,6 +20,7 @@ class DiffKind(str, Enum):
     ONLY_IN_CALC = "計算書のみ"
     SECTION_B_MISMATCH = "断面幅B不一致"
     REBAR_MISMATCH = "配筋不一致"
+    NEEDS_REVIEW = "要目視確認"
 
 
 class Locator(BaseModel):
@@ -114,7 +115,18 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
                     drawing_loc=_field_loc(d, attr),
                     calc_loc=_field_loc(c, attr),
                 ))
-        if rebar_fields:
+        # 構造図側の抽出が不完全だと分かっている場合は「要目視確認」として出す
+        # （配筋不一致と紛らわしい false positive を避ける）
+        if d.needs_review:
+            note_text = c.note or ""
+            if d.review_note:
+                note_text = f"{note_text} | {d.review_note}".strip(" |")
+            diffs.append(Diff(
+                kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
+                note=note_text,
+                drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
+            ))
+        elif rebar_fields:
             diffs.append(Diff(
                 kind=DiffKind.REBAR_MISMATCH, mark=mark, fields=rebar_fields, note=c.note,
                 drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),

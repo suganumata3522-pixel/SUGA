@@ -221,6 +221,7 @@ class DrawingPdfParser(Parser):
                 fc_code = self._extract_fc_code(words, grp, x_lo, x_hi)
                 B = self._extract_section_B(words, grp, x_lo, x_hi)
                 field_bboxes = self._field_bboxes(grp, x_lo, x_hi)
+                needs_review, review_note = self._detect_review_anomaly(words, grp, x_lo, x_hi, positions)
                 out.append(BeamMember(
                     mark=mw["text"],
                     section=Section(B=B, D=None),
@@ -229,8 +230,84 @@ class DrawingPdfParser(Parser):
                     source=self.source,
                     location=LocationHint(page=page_idx, bbox=(x_lo, y_top, x_hi, y_bot)),
                     field_bboxes=field_bboxes,
+                    needs_review=needs_review,
+                    review_note=review_note,
                 ))
         return out
+
+    @staticmethod
+    def _detect_review_anomaly(words, grp, x_lo, x_hi, positions) -> tuple[bool, str | None]:
+        """構造図の小梁リストレイアウトで完全抽出が困難なケースを検出する。
+
+        検出する 2 パターン:
+        (a) 位置ラベル数 > サブ位置数 ... 外端/中央/連続端 等の 3 位置レイアウトで
+            3 番目の鉄筋値が物理的に隣セル領域に置かれて取得できないケース。
+        (b) 上端筋の鉄筋ペア数 ≠ 下端筋の鉄筋ペア数 ... 隣セルから片方の行だけに
+            値が漏れ込んでいるケース (例: B4 に B3A の値が下端筋だけ侵入)。
+        """
+        notes: list[str] = []
+
+        # (a) 位置ラベル数 vs サブ位置数
+        pos_y = grp.get("位置")
+        if pos_y is not None:
+            label_words = []
+            for w in words:
+                if abs(float(w["top"]) - pos_y) > 4:
+                    continue
+                if w["text"] == "位置":
+                    continue
+                wx0 = float(w["x0"])
+                wx1 = float(w.get("x1", wx0 + 5))
+                width = max(wx1 - wx0, 1.0)
+                overlap = max(0.0, min(wx1, x_hi) - max(wx0, x_lo))
+                if overlap / width >= 0.3:
+                    label_words.append(w)
+            label_count = 0
+            skip = False
+            label_words.sort(key=lambda w: float(w["x0"]))
+            for k, w in enumerate(label_words):
+                if skip:
+                    skip = False
+                    continue
+                if w["text"] == "中" and k + 1 < len(label_words) and label_words[k + 1]["text"] == "央":
+                    label_count += 1
+                    skip = True
+                else:
+                    label_count += 1
+            sub_count = len(positions)
+            if label_count > sub_count and label_count >= 3:
+                notes.append(
+                    f"位置ラベル {label_count} 個 vs 抽出サブ位置 {sub_count} 個"
+                    f"（外端/中央/連続端のような 3 位置レイアウトと推測。隣セル境界付近の値が取得困難）"
+                )
+
+        # (b) 上端筋・下端筋の鉄筋ペア数の不一致
+        def _count_pairs(y):
+            if y is None:
+                return 0
+            ws = _collect_at_y(words, y, x_lo, x_hi, tol=4)
+            cnt = 0
+            i = 0
+            while i < len(ws):
+                w = ws[i]
+                if re.match(r"^\d+(?:/\d+)?$", w["text"]) and i + 1 < len(ws) and ws[i + 1]["text"].startswith("-D"):
+                    cnt += 1
+                    i += 2
+                else:
+                    i += 1
+            return cnt
+
+        top_pairs = _count_pairs(grp.get("上端筋"))
+        bot_pairs = _count_pairs(grp.get("下端筋"))
+        if top_pairs and bot_pairs and top_pairs != bot_pairs:
+            notes.append(
+                f"上端筋 {top_pairs} ペア vs 下端筋 {bot_pairs} ペア"
+                f"（隣セルから片方の行のみに値が漏れ込んでいる可能性）"
+            )
+
+        if notes:
+            return True, " / ".join(notes)
+        return False, None
 
     @staticmethod
     def _field_bboxes(grp: dict, x_lo: float, x_hi: float) -> dict[str, tuple[float, float, float, float]]:
