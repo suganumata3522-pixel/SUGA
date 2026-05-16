@@ -12,11 +12,12 @@ hidden = (
     + collect_submodules("pdfplumber")
     + collect_submodules("pdfminer")
     + collect_submodules("fitz")
-    + ["app.main"]
+    + collect_submodules("app")
 )
 
 datas = [("app/static", "static")]
 datas += collect_data_files("pdfminer")
+datas += collect_data_files("pymupdf", include_py_files=False)
 
 a = Analysis(
     ["run.py"],
