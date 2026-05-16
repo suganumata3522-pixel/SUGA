@@ -13,9 +13,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pdfplumber
-
 from ..models import LocationHint, SlabMember, SlabSet, Source
+from .pdf_cache import get_pages
 
 # スラブ符号: S18 / S25A / CS26 / CS315 など
 _SLAB_MARK_RE = re.compile(r"^C?S\d+[A-Z]?$")
@@ -39,10 +38,8 @@ def _parse_thickness(raw: str) -> tuple[int | None, str]:
 # ---------------------------------------------------------------------------
 def parse_drawing_slabs(pdf_path: Path) -> SlabSet:
     slabs: list[SlabMember] = []
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_idx, page in enumerate(pdf.pages, start=1):
-            words = page.extract_words(keep_blank_chars=False)
-            slabs.extend(_parse_drawing_page(words, page_idx))
+    for pd in get_pages(pdf_path):
+        slabs.extend(_parse_drawing_page(pd.words, pd.index))
     return SlabSet(source=Source.DRAWING, file_name=pdf_path.name, slabs=slabs)
 
 
@@ -121,47 +118,47 @@ _RE_SUPPORT = re.compile(r"支持条件：([^,、]+)")
 
 def parse_calc_slabs(pdf_path: Path) -> SlabSet:
     slabs: dict[str, SlabMember] = {}
-    with pdfplumber.open(pdf_path) as pdf:
-        for page_idx, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
-            # 「床のひび割れ」セクションは別フォーマットなので除外
-            if "床のひび割れ" in text:
-                continue
-            lines = [ln.rstrip() for ln in text.splitlines()]
-            cur: dict | None = None
-            for line in lines:
-                hm = _RE_SLAB_HEADER.search(line)
-                if hm:
-                    cur = {
-                        "mark": hm.group(1),
-                        "note": hm.group(2),
-                        "page": page_idx,
-                        "t": None, "fc": None, "support": None,
-                        "top": [], "bottom": [],
-                    }
-                    # ヘッダ行内に t / Fc がある場合もある
-                    tm = _RE_T.search(line)
-                    if tm:
-                        cur["t"] = int(tm.group(1))
-                    _finalize_calc_slab(cur, slabs)
-                    continue
-                if cur is None:
-                    continue
+    for pd in get_pages(pdf_path):
+        page_idx = pd.index
+        text = pd.text
+        # 「床のひび割れ」セクションは別フォーマットなので除外
+        if "床のひび割れ" in text:
+            continue
+        lines = [ln.rstrip() for ln in text.splitlines()]
+        cur: dict | None = None
+        for line in lines:
+            hm = _RE_SLAB_HEADER.search(line)
+            if hm:
+                cur = {
+                    "mark": hm.group(1),
+                    "note": hm.group(2),
+                    "page": page_idx,
+                    "t": None, "fc": None, "support": None,
+                    "top": [], "bottom": [],
+                }
+                # ヘッダ行内に t / Fc がある場合もある
                 tm = _RE_T.search(line)
-                if tm and cur["t"] is None:
+                if tm:
                     cur["t"] = int(tm.group(1))
-                fm = _RE_FC.search(line)
-                if fm and cur["fc"] is None:
-                    cur["fc"] = f"Fc{fm.group(1)}"
-                sm = _RE_SUPPORT.search(line)
-                if sm and cur["support"] is None:
-                    cur["support"] = sm.group(1)
-                if line.startswith("上端筋"):
-                    cur["top"] = _SLAB_REBAR_RE.findall(line)
-                    _finalize_calc_slab(cur, slabs)
-                elif line.startswith("下端筋"):
-                    cur["bottom"] = _SLAB_REBAR_RE.findall(line)
-                    _finalize_calc_slab(cur, slabs)
+                _finalize_calc_slab(cur, slabs)
+                continue
+            if cur is None:
+                continue
+            tm = _RE_T.search(line)
+            if tm and cur["t"] is None:
+                cur["t"] = int(tm.group(1))
+            fm = _RE_FC.search(line)
+            if fm and cur["fc"] is None:
+                cur["fc"] = f"Fc{fm.group(1)}"
+            sm = _RE_SUPPORT.search(line)
+            if sm and cur["support"] is None:
+                cur["support"] = sm.group(1)
+            if line.startswith("上端筋"):
+                cur["top"] = _SLAB_REBAR_RE.findall(line)
+                _finalize_calc_slab(cur, slabs)
+            elif line.startswith("下端筋"):
+                cur["bottom"] = _SLAB_REBAR_RE.findall(line)
+                _finalize_calc_slab(cur, slabs)
     return SlabSet(
         source=Source.CALC,
         file_name=pdf_path.name,

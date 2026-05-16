@@ -18,10 +18,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pdfplumber
-
 from ..models import BeamMember, LocationHint, MemberSet, PositionRebar, Section, Source
 from .base import Parser
+from .pdf_cache import get_pages
 
 __all__ = ["StructureSuitePdfParser", "SSCalcPdfParser"]
 
@@ -76,133 +75,132 @@ class StructureSuitePdfParser(Parser):
 
     def parse(self, pdf_path: Path) -> MemberSet:
         members: list[BeamMember] = []
-        with pdfplumber.open(pdf_path) as pdf:
-            current_block: dict | None = None
-            for page_idx, page in enumerate(pdf.pages, start=1):
-                text = page.extract_text() or ""
-                lines = [ln.rstrip() for ln in text.splitlines()]
-                # 後でフィールド bbox を埋めるため、ページ毎の語も保持
-                page_words = page.extract_words(keep_blank_chars=False)
-                i = 0
-                while i < len(lines):
-                    line = lines[i]
-                    # ブロック開始
-                    m = _RE_BLOCK_HEADER.match(line)
-                    if m:
-                        marks_field = m.group(1)  # 例 "B1・B1A"
-                        note = m.group(2)
-                        block_marks = [s for s in re.split(r"[・,、]", marks_field) if s]
-                        current_block = {
-                            "marks": block_marks,
-                            "note": note,
-                            "page": page_idx,
-                            "concrete": None,
-                            "main": None,
-                            "stirrup": None,
-                            "sections": [],   # [(B,D), ...] 1ブロックに複数のスパン群
-                        }
-                        i += 1
-                        continue
-
-                    if current_block is None:
-                        i += 1
-                        continue
-
-                    # 使用材料
-                    mat = _RE_MATERIAL.search(line)
-                    if mat:
-                        current_block["concrete"] = mat.group(1)
-                        current_block["main"] = mat.group(2)
-                        current_block["stirrup"] = mat.group(3)
-
-                    # 断面寸法
-                    for sec in _RE_SECTION.finditer(line):
-                        current_block["sections"].append((int(sec.group(1)), int(sec.group(2))))
-
-                    # 断面計算ブロック: 符号 / 位置 / 主筋上 / 下 / ST.
-                    if line.startswith("符号"):
-                        mark_line = _RE_MARK_LINE.match(line).group(1)
-                        marks_per_col = re.split(r"\s+", mark_line.strip())
-                        # 次の行は位置
-                        pos_line = lines[i + 1] if i + 1 < len(lines) else ""
-                        if not pos_line.startswith("位置"):
-                            i += 1
-                            continue
-                        position_labels = _split_positions(_RE_POS_LINE.match(pos_line).group(1))
-
-                        # 主筋上下と ST. を後続から探す（数行先まで）
-                        top_tokens: list[str] = []
-                        bottom_tokens: list[str] = []
-                        st_tokens: list[str] = []
-                        for j in range(i + 2, min(i + 25, len(lines))):
-                            ln = lines[j]
-                            mt = _RE_TOP_LINE.match(ln)
-                            mb = _RE_BOT_LINE.match(ln)
-                            ms = _RE_ST_LINE.match(ln)
-                            if mt and not top_tokens:
-                                top_tokens = _tokens_top_bottom(mt.group(1))
-                            elif mb and not bottom_tokens:
-                                bottom_tokens = _tokens_top_bottom(mb.group(1))
-                            elif ms and not st_tokens:
-                                st_tokens = _tokens_st(ms.group(1))
-                            if top_tokens and bottom_tokens and st_tokens:
-                                break
-
-                        # marks_per_col は通常 2つ（左セット/右セット）。
-                        # 各セットの位置数で分配する。
-                        n_pos = len(position_labels)
-                        n_marks = len(marks_per_col)
-                        if n_marks == 0:
-                            i += 1
-                            continue
-                        per = max(1, n_pos // n_marks)
-                        for col_idx, mark in enumerate(marks_per_col):
-                            lo = col_idx * per
-                            hi = lo + per
-                            labels = position_labels[lo:hi]
-                            tops = top_tokens[lo:hi]
-                            bots = bottom_tokens[lo:hi]
-                            sts = st_tokens[lo:hi] if st_tokens else []
-                            positions = [
-                                PositionRebar(
-                                    location=labels[k] if k < len(labels) else "",
-                                    top=tops[k] if k < len(tops) else None,
-                                    bottom=bots[k] if k < len(bots) else None,
-                                    stirrup=sts[k] if k < len(sts) else (sts[-1] if sts else None),
-                                )
-                                for k in range(len(labels))
-                            ]
-                            # 既存メンバーにマージ or 新規追加
-                            existing = next((m for m in members if m.mark == mark), None)
-                            B = D = None
-                            if current_block["sections"]:
-                                # mark がブロック内の何番目かでセクションを引き当てる
-                                bi = current_block["marks"].index(mark) if mark in current_block["marks"] else 0
-                                if bi < len(current_block["sections"]):
-                                    B, D = current_block["sections"][bi]
-                                else:
-                                    B, D = current_block["sections"][-1]
-                            if existing is None:
-                                members.append(BeamMember(
-                                    mark=mark,
-                                    section=Section(B=B, D=D),
-                                    positions=positions,
-                                    concrete_grade=current_block["concrete"],
-                                    rebar_grade_main=current_block["main"],
-                                    rebar_grade_stirrup=current_block["stirrup"],
-                                    source=self.source,
-                                    location=LocationHint(page=page_idx),
-                                    note=current_block["note"] or None,
-                                ))
-                            else:
-                                existing.positions.extend(positions)
-                        i += 2
-                        continue
-
+        current_block: dict | None = None
+        for pd in get_pages(pdf_path):
+            page_idx = pd.index
+            lines = [ln.rstrip() for ln in pd.text.splitlines()]
+            # 後でフィールド bbox を埋めるため、ページ毎の語も保持
+            page_words = pd.words
+            i = 0
+            while i < len(lines):
+                line = lines[i]
+                # ブロック開始
+                m = _RE_BLOCK_HEADER.match(line)
+                if m:
+                    marks_field = m.group(1)  # 例 "B1・B1A"
+                    note = m.group(2)
+                    block_marks = [s for s in re.split(r"[・,、]", marks_field) if s]
+                    current_block = {
+                        "marks": block_marks,
+                        "note": note,
+                        "page": page_idx,
+                        "concrete": None,
+                        "main": None,
+                        "stirrup": None,
+                        "sections": [],   # [(B,D), ...] 1ブロックに複数のスパン群
+                    }
                     i += 1
+                    continue
 
-                # ページ単位で field_bboxes を補完
-                _attach_field_bboxes(members, page_words, page_idx)
+                if current_block is None:
+                    i += 1
+                    continue
+
+                # 使用材料
+                mat = _RE_MATERIAL.search(line)
+                if mat:
+                    current_block["concrete"] = mat.group(1)
+                    current_block["main"] = mat.group(2)
+                    current_block["stirrup"] = mat.group(3)
+
+                # 断面寸法
+                for sec in _RE_SECTION.finditer(line):
+                    current_block["sections"].append((int(sec.group(1)), int(sec.group(2))))
+
+                # 断面計算ブロック: 符号 / 位置 / 主筋上 / 下 / ST.
+                if line.startswith("符号"):
+                    mark_line = _RE_MARK_LINE.match(line).group(1)
+                    marks_per_col = re.split(r"\s+", mark_line.strip())
+                    # 次の行は位置
+                    pos_line = lines[i + 1] if i + 1 < len(lines) else ""
+                    if not pos_line.startswith("位置"):
+                        i += 1
+                        continue
+                    position_labels = _split_positions(_RE_POS_LINE.match(pos_line).group(1))
+
+                    # 主筋上下と ST. を後続から探す（数行先まで）
+                    top_tokens: list[str] = []
+                    bottom_tokens: list[str] = []
+                    st_tokens: list[str] = []
+                    for j in range(i + 2, min(i + 25, len(lines))):
+                        ln = lines[j]
+                        mt = _RE_TOP_LINE.match(ln)
+                        mb = _RE_BOT_LINE.match(ln)
+                        ms = _RE_ST_LINE.match(ln)
+                        if mt and not top_tokens:
+                            top_tokens = _tokens_top_bottom(mt.group(1))
+                        elif mb and not bottom_tokens:
+                            bottom_tokens = _tokens_top_bottom(mb.group(1))
+                        elif ms and not st_tokens:
+                            st_tokens = _tokens_st(ms.group(1))
+                        if top_tokens and bottom_tokens and st_tokens:
+                            break
+
+                    # marks_per_col は通常 2つ（左セット/右セット）。
+                    # 各セットの位置数で分配する。
+                    n_pos = len(position_labels)
+                    n_marks = len(marks_per_col)
+                    if n_marks == 0:
+                        i += 1
+                        continue
+                    per = max(1, n_pos // n_marks)
+                    for col_idx, mark in enumerate(marks_per_col):
+                        lo = col_idx * per
+                        hi = lo + per
+                        labels = position_labels[lo:hi]
+                        tops = top_tokens[lo:hi]
+                        bots = bottom_tokens[lo:hi]
+                        sts = st_tokens[lo:hi] if st_tokens else []
+                        positions = [
+                            PositionRebar(
+                                location=labels[k] if k < len(labels) else "",
+                                top=tops[k] if k < len(tops) else None,
+                                bottom=bots[k] if k < len(bots) else None,
+                                stirrup=sts[k] if k < len(sts) else (sts[-1] if sts else None),
+                            )
+                            for k in range(len(labels))
+                        ]
+                        # 既存メンバーにマージ or 新規追加
+                        existing = next((m for m in members if m.mark == mark), None)
+                        B = D = None
+                        if current_block["sections"]:
+                            # mark がブロック内の何番目かでセクションを引き当てる
+                            bi = current_block["marks"].index(mark) if mark in current_block["marks"] else 0
+                            if bi < len(current_block["sections"]):
+                                B, D = current_block["sections"][bi]
+                            else:
+                                B, D = current_block["sections"][-1]
+                        if existing is None:
+                            members.append(BeamMember(
+                                mark=mark,
+                                section=Section(B=B, D=D),
+                                positions=positions,
+                                concrete_grade=current_block["concrete"],
+                                rebar_grade_main=current_block["main"],
+                                rebar_grade_stirrup=current_block["stirrup"],
+                                source=self.source,
+                                location=LocationHint(page=page_idx),
+                                note=current_block["note"] or None,
+                            ))
+                        else:
+                            existing.positions.extend(positions)
+                    i += 2
+                    continue
+
+                i += 1
+
+            # ページ単位で field_bboxes を補完
+            _attach_field_bboxes(members, page_words, page_idx)
 
         return MemberSet(source=self.source, file_name=pdf_path.name, members=members)
 

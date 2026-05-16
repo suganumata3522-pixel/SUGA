@@ -16,10 +16,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-import pdfplumber
-
 from ..models import BeamMember, LocationHint, MemberSet, PositionRebar, Section, Source
 from .base import Parser
+from .pdf_cache import get_pages
 
 _MARK_RE = re.compile(r"^(?:B|CB|CG|WB|WCB|FB|FCG|FG)\d+[A-Z]?$")
 # 主筋径は D10/D13/D16/D19/D22/D25/D29/D32/D35/D38/D41 を許容
@@ -133,10 +132,8 @@ class DrawingPdfParser(Parser):
 
     def parse(self, pdf_path: Path) -> MemberSet:
         members: list[BeamMember] = []
-        with pdfplumber.open(pdf_path) as pdf:
-            for page_idx, page in enumerate(pdf.pages, start=1):
-                words = page.extract_words(keep_blank_chars=False)
-                members.extend(self._parse_page(words, page_idx))
+        for pd in get_pages(pdf_path):
+            members.extend(self._parse_page(pd.words, pd.index))
         return MemberSet(source=self.source, file_name=pdf_path.name, members=members)
 
     def _parse_page(self, words: list[dict], page_idx: int) -> list[BeamMember]:
