@@ -18,6 +18,13 @@ dist/
 *.sqlite-journal
 backend/data/
 backend/uploads/
+SUGA-data/
+
+# Build artifacts
+backend/app/static/
+backend/build/
+backend/dist/
+*.spec.bak
 
 # Editor / OS
 .vscode/

@@ -56,13 +56,46 @@ frontend/
 docker-compose.yml
 ```
 
-## ローカル起動
+## 社内への展開方法
+
+本アプリは「FastAPI が React 画面も同時に配信する 1 プロセス・1 ポート」構成。
+用途に応じて 2 通りの配り方ができる。
+
+### 方法1: 各自の PC で個別に起動（推奨・最も手軽）
+
+実行ファイル `SUGA.exe` を 1 つ配るだけ。利用者は Python も Docker も不要。
+
+1. **ビルド担当者が一度だけ** `SUGA.exe` を作る（Windows / Python 3.11+ / Node.js 20+ が必要）
+   ```
+   scripts\build_exe.bat
+   ```
+   → `backend\dist\SUGA.exe` が生成される
+2. その `SUGA.exe` を各利用者へ配布（社内共有フォルダ等）
+3. 利用者は `SUGA.exe` をダブルクリック → 自動でブラウザが開く
+   - データ（案件・PDF）は exe と同じ場所の `SUGA-data/` に保存される
+   - 終了するときはコンソールウィンドウを閉じる
+
+### 方法2: 社内サーバ / 常時起動 PC に 1 台だけ設置（共有利用）
+
+Docker のある環境なら 1 コマンド。利用者はブラウザだけ。
 
 ```bash
-docker compose up --build
-# フロント: http://localhost:5173
-# API:      http://localhost:8000/api/health
+docker compose up -d --build
+# 利用者は http://<そのPCのIP>:8000 にアクセス
 ```
+
+## 開発時の起動
+
+```bash
+# バックエンド（API + 同梱フロント配信）
+cd backend && pip install -e ".[dev]" && python run.py
+
+# フロントを編集しながら開発する場合は vite dev サーバを併用
+cd frontend && npm install
+VITE_API_BASE=http://localhost:8000 npm run dev   # http://localhost:5173
+```
+
+フロントを更新したら `scripts/build_frontend.sh` で `backend/app/static/` に反映する。
 
 ## CLI で動作確認
 

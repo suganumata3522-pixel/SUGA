@@ -1,4 +1,6 @@
-const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+// 本番ビルドでは FastAPI が同一オリジンでフロントを配信するため空文字（相対パス）。
+// 開発時 (vite dev) は VITE_API_BASE=http://localhost:8000 を指定する。
+const BASE = import.meta.env.VITE_API_BASE ?? "";
 
 export type Project = { id: number; name: string; created_at?: string };
 

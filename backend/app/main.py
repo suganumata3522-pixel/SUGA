@@ -8,11 +8,12 @@ from pathlib import Path
 import fitz  # PyMuPDF
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from sqlmodel import select
 
 from .checker import Diff, compare, compare_slabs
-from .config import UPLOAD_DIR
+from .config import STATIC_DIR, UPLOAD_DIR
 from .db import Project, UploadedFile, get_session, init_db
 from .models import MemberSet
 from .parsers import DrawingPdfParser, StructureSuitePdfParser, parse_calc_slabs, parse_drawing_slabs
@@ -170,3 +171,25 @@ def highlight(
         return Response(content=buf.getvalue(), media_type="image/png")
     finally:
         doc.close()
+
+
+# ---------------------------------------------------------------------------
+# フロントエンド（ビルド済み React）の配信
+# API ルートより後に登録することで /api/* を優先させる。
+# ---------------------------------------------------------------------------
+if STATIC_DIR.is_dir():
+    _assets = STATIC_DIR / "assets"
+    if _assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=_assets), name="assets")
+
+    @app.get("/")
+    def _index() -> FileResponse:
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/{full_path:path}")
+    def _spa_fallback(full_path: str) -> FileResponse:
+        # 実ファイルがあればそれを、無ければ index.html を返す（SPA ルーティング）
+        candidate = STATIC_DIR / full_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(STATIC_DIR / "index.html")

@@ -1,30 +1,17 @@
+# 単一コンテナ構成。フロント・バックを 1 つにまとめ、ポート 8000 のみ公開。
+#   docker compose up -d --build   で起動
+#   ブラウザで http://localhost:8000 （他PCからは http://<ホストIP>:8000）
 services:
-  backend:
-    build: ./backend
-    container_name: suga-backend
+  suga:
+    build: .
+    container_name: suga
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/app:/app/app
-      - suga-data:/app/data
-      - suga-uploads:/app/uploads
+      - suga-data:/app/SUGA-data
     environment:
-      - SUGA_DB_URL=sqlite:////app/data/suga.db
-      - SUGA_UPLOAD_DIR=/app/uploads
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-
-  frontend:
-    build: ./frontend
-    container_name: suga-frontend
-    ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/index.html:/app/index.html
-    environment:
-      - VITE_API_BASE=http://localhost:8000
-    command: npm run dev -- --host 0.0.0.0
+      - SUGA_DATA_DIR=/app/SUGA-data
+    restart: unless-stopped
 
 volumes:
   suga-data:
-  suga-uploads:
