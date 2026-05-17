@@ -131,7 +131,7 @@ def make() -> str:
     tc(p, (b2.x0 + b2.x1) / 2, y + 28, "あなた（使う人）", size=12, color=BLUE, bold=True)
     tc(p, (b2.x0 + b2.x1) / 2, y + 44, "（毎回の作業）", size=8, color=BLUE)
     p.draw_line((b2.x0 + 16, y + 56), (b2.x1 - 16, y + 56), color=(0.75, 0.85, 1.0), width=1)
-    for i, s in enumerate(["SUGA.exe をダブルクリック", "PDFを2つえらぶ", "ボタンを押す → 結果を見る", "", "→ ガイドの 2〜5ページ目"]):
+    for i, s in enumerate(["SUGA.exe をダブルクリック", "PDFをドラッグ＆ドロップ", "ボタンを押す → 結果を見る", "", "→ ガイドの 2〜5ページ目"]):
         tc(p, (b2.x0 + b2.x1) / 2, y + 76 + i * 15, s, size=9,
            color=DARKBLUE if i < 4 else BLUE, bold=(i < 3))
 
@@ -151,7 +151,7 @@ def make() -> str:
     y = 540
     tc(p, W / 2, y, "毎回の作業の流れ（かんたん4ステップ）", size=12, color=BLUE, bold=True)
     y += 22
-    flow = ["SUGA.exe を\nダブルクリック", "案件名を\n入力", "PDFを2つ\nえらぶ", "ボタンを押して\n結果を見る"]
+    flow = ["SUGA.exe を\nダブルクリック", "PDFをここへ\nドラッグ", "整合チェック\n実行", "結果を見る\n（PDFで照合）"]
     bw = (W - 2 * M - 3 * 24) / 4
     for i, s in enumerate(flow):
         bx = M + i * (bw + 24)
@@ -223,62 +223,68 @@ def make() -> str:
 
     pagefooter(p, 2, TOTAL)
 
-    # ============ ページ3: 案件作成・PDF選択 ============
+    # ============ ページ3: PDFを入れる ============
     p = doc.new_page(width=W, height=H)
-    header(p, "【使い方 2】 案件をつくる / PDFをえらぶ", "物件ごとに「案件」をつくります")
+    header(p, "【使い方 2】 PDFを入れる", "構造図・計算書PDFをドラッグ＆ドロップ")
 
-    t(p, M, 88, "手順1  「案件名」を入力して「新規作成」ボタンを押します。", size=11, color=DARK, bold=True)
+    t(p, M, 88, "手順1  PDFファイルを、画面の枠の中へドラッグして放します。", size=11, color=DARK, bold=True)
+    t(p, M, 106, "（クリックしてファイルを選んでもOK。複数ファイルもまとめて入れられます）", size=9, color=GRAY)
 
-    win = window(p, (M, 104, W - M, 230), "ブラウザ - SUGA")
-    rect(p, (win.x0 + 14, win.y0 + 14, win.x1 - 14, win.y1 - 14),
+    win = window(p, (M, 122, W - M, 320), "ブラウザ - SUGA")
+    rect(p, (win.x0 + 14, win.y0 + 12, win.x1 - 14, win.y1 - 12),
          fill=WHITE, stroke=BORDER)
-    t(p, win.x0 + 26, win.y0 + 36, "案件（プロジェクト）", size=10, color=BLUE, bold=True)
-    t(p, win.x0 + 26, win.y0 + 54, "物件ごとに案件名を入れて「新規作成」を押します。", size=8, color=GRAY)
-    # 入力欄
-    inp = fitz.Rect(win.x0 + 26, win.y0 + 64, win.x0 + 250, win.y0 + 84)
-    rect(p, inp, fill=WHITE, stroke=(0.6, 0.63, 0.68))
-    t(p, inp.x0 + 8, inp.y0 + 14, "○○マンション 新築工事", size=8, color=DARK)
-    # ボタン
-    btn = fitz.Rect(win.x0 + 262, win.y0 + 64, win.x0 + 330, win.y0 + 84)
-    rect(p, btn, fill=BLUE, stroke=BLUE)
-    tc(p, (btn.x0 + btn.x1) / 2, btn.y0 + 14, "新規作成", size=8, color=WHITE)
-    stepnum(p, inp.x0 - 2, inp.y0 + 10, 1, r=9)
-    callout(p, win.x0 + 60, win.y0 + 88, 210,
-            ["まず案件名を入力", "例: ○○マンション 新築工事"],
-            (inp.x0 + 70, inp.y1))
-    redring(p, (btn.x0 + btn.x1) / 2, (btn.y0 + btn.y1) / 2, 42, 16)
-    cursor(p, btn.x1 - 14, btn.y1 - 4)
+    t(p, win.x0 + 26, win.y0 + 32, "PDFを入れる", size=10, color=BLUE, bold=True)
+    # 2つのドロップゾーン
+    zone_titles = ["構造図PDF（二次部材リスト）", "計算書PDF（StructureSuite）"]
+    zw = (win.x1 - win.x0 - 52 - 16) / 2
+    for i, zt in enumerate(zone_titles):
+        zx = win.x0 + 26 + i * (zw + 16)
+        t(p, zx, win.y0 + 52, zt, size=8, color=DARK, bold=True)
+        dz = fitz.Rect(zx, win.y0 + 58, zx + zw, win.y0 + 130)
+        p.draw_rect(dz, fill=(0.98, 0.98, 0.99), color=(0.55, 0.6, 0.7),
+                    width=1.2, dashes="[3 2] 0")
+        tc(p, zx + zw / 2, win.y0 + 86, "＋", size=18, color=(0.6, 0.66, 0.75))
+        tc(p, zx + zw / 2, win.y0 + 102, "ここにPDFを", size=7.5, color=GRAY)
+        tc(p, zx + zw / 2, win.y0 + 114, "ドラッグ＆ドロップ", size=7.5, color=GRAY)
+        stepnum(p, zx + 6, win.y0 + 64, i + 1, r=9)
+    # 構造図ゾーンに「ドラッグ中のPDF」を表現
+    z1x = win.x0 + 26
+    drag = fitz.Rect(z1x + zw - 30, win.y0 + 92, z1x + zw + 36, win.y0 + 120)
+    p.draw_rect(drag, fill=(1, 0.9, 0.75), color=(0.85, 0.6, 0.2), width=1)
+    tc(p, (drag.x0 + drag.x1) / 2, win.y0 + 109, "S4001.pdf", size=6.5, color=DARK)
+    cursor(p, drag.x1 - 16, win.y0 + 110)
+    callout(p, win.x0 + 60, win.y0 + 138, 240,
+            ["PDFファイルをマウスでつかんで", "枠の中まで運んで放す（ドロップ）"],
+            (z1x + zw / 2, win.y0 + 120))
 
-    t(p, M, 282, "手順2  「構造図PDF」と「計算書PDF」の2つをえらびます。", size=11, color=DARK, bold=True)
+    t(p, M, 348, "手順2  入れ終わったら「整合チェック実行」ボタンを押します。", size=11, color=DARK, bold=True)
 
-    win2 = window(p, (M, 298, W - M, 492), "ブラウザ - SUGA")
-    rect(p, (win2.x0 + 14, win2.y0 + 14, win2.x1 - 14, win2.y1 - 14),
+    win2 = window(p, (M, 364, W - M, 500), "ブラウザ - SUGA")
+    rect(p, (win2.x0 + 14, win2.y0 + 12, win2.x1 - 14, win2.y1 - 12),
          fill=WHITE, stroke=BORDER)
-    t(p, win2.x0 + 26, win2.y0 + 36, "PDFアップロード", size=10, color=BLUE, bold=True)
-    labels = ["構造図PDF（二次部材リスト）", "計算書PDF（StructureSuite）"]
-    for i, lab in enumerate(labels):
-        ly = win2.y0 + 52 + i * 38
-        t(p, win2.x0 + 26, ly + 10, lab, size=8.5, color=DARK, bold=True)
-        fb = fitz.Rect(win2.x0 + 26, ly + 16, win2.x0 + 140, ly + 34)
-        rect(p, fb, fill=(0.94, 0.94, 0.96), stroke=(0.6, 0.63, 0.68))
-        tc(p, (fb.x0 + fb.x1) / 2, fb.y0 + 12, "ファイルを選択", size=7.5, color=DARK)
-        t(p, fb.x1 + 10, ly + 28, "← クリックして該当PDFをえらぶ", size=8, color=GRAY)
-        stepnum(p, fb.x0 - 2, fb.y0 + 9, i + 1, r=9)
+    # 入れたファイル一覧の例
+    t(p, win2.x0 + 26, win2.y0 + 32, "入れたPDF（例）", size=8.5, color=DARK, bold=True)
+    for i, fn in enumerate(["S4001.pdf", "計算書.pdf"]):
+        fy = win2.y0 + 40 + i * 18
+        fb = fitz.Rect(win2.x0 + 26, fy, win2.x0 + 200, fy + 14)
+        rect(p, fb, fill=(0.95, 0.96, 0.97), stroke=BORDER)
+        t(p, fb.x0 + 8, fy + 10, fn, size=7, color=DARK)
+        t(p, fb.x1 - 14, fy + 10, "×", size=8, color=RED)
+    t(p, win2.x0 + 210, win2.y0 + 52, "× を押すと取り消せます", size=7.5, color=GRAY)
     # 実行ボタン
-    rb = fitz.Rect(win2.x0 + 26, win2.y0 + 138, win2.x0 + 170, win2.y0 + 162)
+    rb = fitz.Rect(win2.x0 + 26, win2.y0 + 86, win2.x0 + 180, win2.y0 + 110)
     rect(p, rb, fill=BLUE, stroke=BLUE)
-    tc(p, (rb.x0 + rb.x1) / 2, rb.y0 + 16, "整合チェック実行", size=9, color=WHITE, bold=True)
-    stepnum(p, rb.x0 - 2, rb.y0 + 12, 3, r=9)
-    redring(p, (rb.x0 + rb.x1) / 2, (rb.y0 + rb.y1) / 2, 80, 18)
-    cursor(p, rb.x1 - 20, rb.y1 - 4)
-    callout(p, win2.x0 + 200, win2.y0 + 120, 200,
-            ["2つえらんだら", "このボタンを押す"],
+    tc(p, (rb.x0 + rb.x1) / 2, win2.y0 + 102, "整合チェック実行", size=9, color=WHITE)
+    redring(p, (rb.x0 + rb.x1) / 2, (rb.y0 + rb.y1) / 2, 86, 18)
+    cursor(p, rb.x1 - 24, rb.y1 - 4)
+    callout(p, win2.x0 + 210, win2.y0 + 78, 210,
+            ["構造図・計算書を入れたら", "このボタンを押す（20〜30秒）"],
             ((rb.x0 + rb.x1) / 2, rb.y0))
 
-    nb = fitz.Rect(M, 512, W - M, 562)
+    nb = fitz.Rect(M, 516, W - M, 566)
     rect(p, nb, fill=LIGHT, stroke=(0.75, 0.85, 1.0), width=1, radius=6)
-    t(p, M + 14, 532, "● どのPDFが「構造図」「計算書」か分からないときは、", size=9, color=DARK)
-    t(p, M + 14, 548, "  設計担当の人に確認してください。", size=9, color=DARK)
+    t(p, M + 14, 536, "● どのPDFが「構造図」「計算書」か分からないときは、", size=9, color=DARK)
+    t(p, M + 14, 552, "  設計担当の人に確認してください。", size=9, color=DARK)
 
     pagefooter(p, 3, TOTAL)
 
