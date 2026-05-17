@@ -9,9 +9,19 @@ echo.
 echo ====== SUGA.exe build start ======
 echo.
 
-echo [check] Python version:
+REM --- Find a working Python command (python or py) ---
+set PYEXE=
+echo [check] Trying "python" ...
 python --version
-if errorlevel 1 goto err_python
+if not errorlevel 1 set PYEXE=python
+if not defined PYEXE (
+  echo [check] "python" not usable. Trying "py" ...
+  py --version
+  if not errorlevel 1 set PYEXE=py
+)
+if not defined PYEXE goto err_python
+echo [check] Using Python command: %PYEXE%
+echo.
 
 echo [check] Node.js version:
 node --version
@@ -35,14 +45,14 @@ echo.
 
 echo [3/4] Installing Python deps and PyInstaller ...
 cd backend
-python -m pip install -e .
+%PYEXE% -m pip install -e .
 if errorlevel 1 goto err_pip
-python -m pip install pyinstaller
+%PYEXE% -m pip install pyinstaller
 if errorlevel 1 goto err_pyinstaller_install
 echo.
 
 echo [4/4] Building SUGA.exe with PyInstaller ...
-python -m PyInstaller suga.spec --noconfirm --clean
+%PYEXE% -m PyInstaller suga.spec --noconfirm --clean
 if errorlevel 1 goto err_pyinstaller_build
 cd ..
 echo.
@@ -58,12 +68,19 @@ exit /b 0
 
 :err_python
 echo.
-echo [ERROR] Python not found. Install Python 3.11+ and check
-echo         "Add Python to PATH" during installation.
+echo [ERROR] Python is not usable from the command line.
+echo.
+echo   How to fix:
+echo   1. Install Python 3.11 or newer from  https://www.python.org/downloads/
+echo   2. On the FIRST screen of the installer, turn ON the checkbox
+echo      "Add python.exe to PATH"  (it is at the bottom).
+echo   3. Finish the install, then RESTART this computer.
+echo   4. Run this build_exe.bat again.
+echo.
 goto end_error
 :err_node
 echo.
-echo [ERROR] Node.js not found. Install Node.js 20+.
+echo [ERROR] Node.js not found. Install Node.js 20+ from https://nodejs.org/
 goto end_error
 :err_npm_install
 cd ..
