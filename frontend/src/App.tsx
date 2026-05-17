@@ -87,43 +87,65 @@ export default function App() {
 
   return (
     <div className="container">
-      <h1>SUGA - 構造図 / 計算書 整合チェック（RC小梁）</h1>
+      <header className="app-header">
+        <div className="app-title">SUGA</div>
+        <div className="app-subtitle">構造図・計算書 整合チェックツール（RC小梁・スラブ）</div>
+      </header>
+
+      <div className="steps-guide">
+        <div className="step"><span className="step-no">1</span>案件を作成</div>
+        <div className="step-arrow">→</div>
+        <div className="step"><span className="step-no">2</span>構造図・計算書PDFを選ぶ</div>
+        <div className="step-arrow">→</div>
+        <div className="step"><span className="step-no">3</span>「整合チェック実行」を押す</div>
+        <div className="step-arrow">→</div>
+        <div className="step"><span className="step-no">4</span>差分を確認・PDFで照合</div>
+      </div>
+
       {error && <div className="card error">{error}</div>}
 
       <div className="card">
-        <h2>プロジェクト</h2>
+        <h2><span className="badge">1</span>案件（プロジェクト）</h2>
+        <p className="hint">物件ごとに案件を作成します。案件名を入れて「新規作成」を押してください。</p>
         <div className="row">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="案件名（例: ○○マンション）" />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="案件名（例: ○○マンション 新築工事）" />
           <button onClick={handleCreate}>新規作成</button>
         </div>
-        <table>
-          <thead><tr><th>ID</th><th>案件名</th><th>選択</th></tr></thead>
-          <tbody>
-            {projects.map((p) => (
-              <tr key={p.id}>
-                <td>{p.id}</td>
-                <td>{p.name}</td>
-                <td><button onClick={() => setCurrent(p)}>{current?.id === p.id ? "選択中" : "選ぶ"}</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {projects.length > 0 && (
+          <table>
+            <thead><tr><th>ID</th><th>案件名</th><th>選択</th></tr></thead>
+            <tbody>
+              {projects.map((p) => (
+                <tr key={p.id}>
+                  <td>{p.id}</td>
+                  <td>{p.name}</td>
+                  <td><button onClick={() => setCurrent(p)}>{current?.id === p.id ? "選択中" : "選ぶ"}</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {current && (
         <div className="card">
-          <h2>ファイルアップロード — {current.name}</h2>
+          <h2><span className="badge">2</span>PDFアップロード — {current.name}</h2>
+          <p className="hint">構造図（二次部材リスト）と計算書（StructureSuite）のPDFを選び、「整合チェック実行」を押します。</p>
           <div className="row">
-            <label>構造図PDF（二次部材リスト）:
+            <label className="filelabel">構造図PDF（二次部材リスト）
               <input type="file" accept="application/pdf" onChange={(e) => setDrawing(e.target.files?.[0] ?? null)} />
             </label>
+            <span className={drawing ? "filemark ok" : "filemark"}>{drawing ? "✓ " + drawing.name : "未選択"}</span>
           </div>
           <div className="row">
-            <label>計算書PDF（StructureSuite 小梁）:
+            <label className="filelabel">計算書PDF（StructureSuite）
               <input type="file" accept="application/pdf" onChange={(e) => setCalc(e.target.files?.[0] ?? null)} />
             </label>
-            <button onClick={handleCheck} disabled={busy || (!drawing && !calc)}>
-              {busy ? "照合中..." : "整合チェック実行"}
+            <span className={calc ? "filemark ok" : "filemark"}>{calc ? "✓ " + calc.name : "未選択"}</span>
+          </div>
+          <div className="row">
+            <button className="primary" onClick={handleCheck} disabled={busy || (!drawing && !calc)}>
+              {busy ? "照合中... (20〜30秒)" : "整合チェック実行"}
             </button>
           </div>
         </div>
@@ -131,7 +153,11 @@ export default function App() {
 
       {result && (
         <div className="card">
-          <h2>結果 — 小梁</h2>
+          <h2><span className="badge">3</span>整合チェック結果 — 小梁</h2>
+          <p className="hint">
+            「配筋不一致」「断面幅B不一致」は要修正候補、「要目視確認」はツールで確定できずPDF目視が必要なもの、
+            「図のみ／計算書のみ」は片方にしか存在しない符号です。各行の「図」「計算」ボタンで元PDFの該当箇所を表示できます。
+          </p>
           <p>
             構造図: <b>{result.drawing_member_count}</b> 部材 /
             計算書: <b>{result.calc_member_count}</b> 部材 /
@@ -158,7 +184,7 @@ export default function App() {
 
       {result && (
         <div className="card">
-          <h2>結果 — スラブ</h2>
+          <h2><span className="badge">4</span>整合チェック結果 — スラブ</h2>
           <p>
             構造図: <b>{result.drawing_slab_count}</b> 枚 /
             計算書: <b>{result.calc_slab_count}</b> 枚 /
