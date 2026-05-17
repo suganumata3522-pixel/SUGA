@@ -183,6 +183,11 @@ def highlight(
 # ---------------------------------------------------------------------------
 # フロントエンド配信（API ルートの後に登録）
 # ---------------------------------------------------------------------------
+# index.html はブラウザにキャッシュさせない（exe 更新後に古い画面が
+# 表示されて API と食い違うのを防ぐ）。中身がハッシュ付きの assets は
+# キャッシュ可。
+_NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
 if STATIC_DIR.is_dir():
     _assets = STATIC_DIR / "assets"
     if _assets.is_dir():
@@ -190,11 +195,11 @@ if STATIC_DIR.is_dir():
 
     @app.get("/")
     def _index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE)
 
     @app.get("/{full_path:path}")
     def _spa_fallback(full_path: str) -> FileResponse:
         candidate = STATIC_DIR / full_path
         if candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE)
