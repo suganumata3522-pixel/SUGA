@@ -32,6 +32,7 @@ class Locator(BaseModel):
     page: int
     bbox: tuple[float, float, float, float] | None = None
     search: str | None = None  # bbox が無い時に使う検索語（通常は符号）
+    file_id: str | None = None  # どのアップロードPDFか
 
 
 class FieldDiff(BaseModel):
@@ -64,23 +65,24 @@ def _aggregate_rebar(m: BeamMember, attr: str) -> set[str]:
 def _drawing_loc(d: BeamMember | None) -> Locator | None:
     if d is None or d.location is None:
         return None
-    return Locator(page=d.location.page, bbox=d.location.bbox, search=d.mark)
+    return Locator(page=d.location.page, bbox=d.location.bbox, search=d.mark,
+                   file_id=d.location.file_id)
 
 
 def _calc_loc(c: BeamMember | None) -> Locator | None:
     if c is None or c.location is None:
         return None
-    return Locator(page=c.location.page, bbox=c.location.bbox, search=c.mark)
+    return Locator(page=c.location.page, bbox=c.location.bbox, search=c.mark,
+                   file_id=c.location.file_id)
 
 
 def _field_loc(m: BeamMember | None, key: str) -> Locator | None:
     """フィールド単位の bbox。なければメンバ全体に fallback。"""
     if m is None or m.location is None:
         return None
-    bbox = m.field_bboxes.get(key)
-    if bbox is None:
-        return Locator(page=m.location.page, bbox=m.location.bbox, search=m.mark)
-    return Locator(page=m.location.page, bbox=bbox, search=m.mark)
+    bbox = m.field_bboxes.get(key) or m.location.bbox
+    return Locator(page=m.location.page, bbox=bbox, search=m.mark,
+                   file_id=m.location.file_id)
 
 
 def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
@@ -152,8 +154,9 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
 def _slab_loc(s: SlabMember | None, key: str | None = None) -> Locator | None:
     if s is None or s.location is None:
         return None
-    bbox = s.field_bboxes.get(key) if key else s.location.bbox
-    return Locator(page=s.location.page, bbox=bbox or s.location.bbox, search=s.mark)
+    bbox = (s.field_bboxes.get(key) if key else s.location.bbox) or s.location.bbox
+    return Locator(page=s.location.page, bbox=bbox, search=s.mark,
+                   file_id=s.location.file_id)
 
 
 def _thickness_range(raw: str | None, fallback: int | None) -> tuple[int, int] | None:

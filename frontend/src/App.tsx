@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckResult, Diff, Locator, Project, createProject, highlightUrl, listProjects, runCheck, uploadFile } from "./api";
+import {
+  CheckResult, Diff, Locator, UploadInfo,
+  clearUploads, deleteUpload, highlightUrl, listUploads, runCheck, uploadFiles,
+} from "./api";
 
 const KIND_COLORS: Record<string, string> = {
   "図のみ": "diff-only",
@@ -15,19 +18,10 @@ const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;
 const CANTILEVER_PREFIX = /^(?:CB|WCB)\d/;
 const WALLBEAM_PREFIX = /^(?:WB)\d/;
 
-type HighlightTarget = {
-  projectId: number;
-  role: "drawing" | "calc";
-  loc: Locator;
-  mark: string;
-};
+type HighlightTarget = { role: "drawing" | "calc"; loc: Locator; mark: string };
 
 export default function App() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [name, setName] = useState("");
-  const [current, setCurrent] = useState<Project | null>(null);
-  const [drawing, setDrawing] = useState<File | null>(null);
-  const [calc, setCalc] = useState<File | null>(null);
+  const [uploads, setUploads] = useState<{ drawing: UploadInfo[]; calc: UploadInfo[] }>({ drawing: [], calc: [] });
   const [result, setResult] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,31 +31,40 @@ export default function App() {
   const [hideWallBeam, setHideWallBeam] = useState(false);
   const [highlight, setHighlight] = useState<HighlightTarget | null>(null);
 
-  useEffect(() => {
-    listProjects().then(setProjects).catch((e) => setError(String(e)));
-  }, []);
+  const refresh = () => listUploads().then(setUploads).catch((e) => setError(String(e)));
+  useEffect(() => { refresh(); }, []);
 
-  const handleCreate = async () => {
-    if (!name) return;
+  const handleUpload = async (role: "drawing" | "calc", files: File[]) => {
+    const pdfs = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+    if (pdfs.length === 0) {
+      setError("PDFファイルを選んでください");
+      return;
+    }
+    setError(null);
     try {
-      const p = await createProject(name);
-      setName("");
-      setProjects(await listProjects());
-      setCurrent(p);
+      await uploadFiles(role, pdfs);
+      await refresh();
     } catch (e) {
       setError(String(e));
     }
   };
 
+  const handleDelete = async (id: string) => {
+    await deleteUpload(id);
+    await refresh();
+  };
+
+  const handleClear = async () => {
+    await clearUploads();
+    setResult(null);
+    await refresh();
+  };
+
   const handleCheck = async () => {
-    if (!current) return;
     setBusy(true);
     setError(null);
     try {
-      if (drawing) await uploadFile(current.id, "drawing", drawing);
-      if (calc) await uploadFile(current.id, "calc", calc);
-      const r = await runCheck(current.id);
-      setResult(r);
+      setResult(await runCheck());
     } catch (e) {
       setError(String(e));
     } finally {
@@ -81,9 +84,11 @@ export default function App() {
   }, [result, hideFoundation, hideCantilever, hideWallBeam, hideCalcOnly]);
 
   const openHighlight = (role: "drawing" | "calc", loc: Locator | null | undefined, mark: string) => {
-    if (!loc || !current) return;
-    setHighlight({ projectId: current.id, role, loc, mark });
+    if (!loc || !loc.file_id) return;
+    setHighlight({ role, loc, mark });
   };
+
+  const canCheck = uploads.drawing.length > 0 && uploads.calc.length > 0;
 
   return (
     <div className="container">
@@ -93,90 +98,59 @@ export default function App() {
       </header>
 
       <div className="steps-guide">
-        <div className="step"><span className="step-no">1</span>案件を作成</div>
+        <div className="step"><span className="step-no">1</span>構造図・計算書PDFを入れる</div>
         <div className="step-arrow">→</div>
-        <div className="step"><span className="step-no">2</span>構造図・計算書PDFを選ぶ</div>
+        <div className="step"><span className="step-no">2</span>「整合チェック実行」を押す</div>
         <div className="step-arrow">→</div>
-        <div className="step"><span className="step-no">3</span>「整合チェック実行」を押す</div>
-        <div className="step-arrow">→</div>
-        <div className="step"><span className="step-no">4</span>差分を確認・PDFで照合</div>
+        <div className="step"><span className="step-no">3</span>差分を確認・PDFで照合</div>
       </div>
 
       {error && <div className="card error">{error}</div>}
 
       <div className="card">
-        <h2><span className="badge">1</span>案件（プロジェクト）</h2>
-        <p className="hint">物件ごとに案件を作成します。案件名を入れて「新規作成」を押してください。</p>
+        <h2><span className="badge">1</span>PDFを入れる</h2>
+        <p className="hint">
+          構造図PDF・計算書PDFを下の枠にドラッグ＆ドロップ、または「ファイルを選ぶ」で追加します。
+          複数ファイル（複数ページの図面など）をまとめて入れられます。
+        </p>
+        <div className="dropzones">
+          <DropZone role="drawing" title="構造図PDF（二次部材リスト）"
+                    files={uploads.drawing} onUpload={handleUpload} onDelete={handleDelete} />
+          <DropZone role="calc" title="計算書PDF（StructureSuite）"
+                    files={uploads.calc} onUpload={handleUpload} onDelete={handleDelete} />
+        </div>
         <div className="row">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="案件名（例: ○○マンション 新築工事）" />
-          <button onClick={handleCreate}>新規作成</button>
+          <button className="primary" onClick={handleCheck} disabled={busy || !canCheck}>
+            {busy ? "照合中... (20〜30秒)" : "整合チェック実行"}
+          </button>
+          {(uploads.drawing.length > 0 || uploads.calc.length > 0) && (
+            <button className="ghost" onClick={handleClear} disabled={busy}>すべて消去</button>
+          )}
+          {!canCheck && <span className="hint" style={{ margin: 0 }}>構造図・計算書を両方入れると実行できます</span>}
         </div>
-        {projects.length > 0 && (
-          <table>
-            <thead><tr><th>ID</th><th>案件名</th><th>選択</th></tr></thead>
-            <tbody>
-              {projects.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.id}</td>
-                  <td>{p.name}</td>
-                  <td><button onClick={() => setCurrent(p)}>{current?.id === p.id ? "選択中" : "選ぶ"}</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </div>
-
-      {current && (
-        <div className="card">
-          <h2><span className="badge">2</span>PDFアップロード — {current.name}</h2>
-          <p className="hint">構造図（二次部材リスト）と計算書（StructureSuite）のPDFを選び、「整合チェック実行」を押します。</p>
-          <div className="row">
-            <label className="filelabel">構造図PDF（二次部材リスト）
-              <input type="file" accept="application/pdf" onChange={(e) => setDrawing(e.target.files?.[0] ?? null)} />
-            </label>
-            <span className={drawing ? "filemark ok" : "filemark"}>{drawing ? "✓ " + drawing.name : "未選択"}</span>
-          </div>
-          <div className="row">
-            <label className="filelabel">計算書PDF（StructureSuite）
-              <input type="file" accept="application/pdf" onChange={(e) => setCalc(e.target.files?.[0] ?? null)} />
-            </label>
-            <span className={calc ? "filemark ok" : "filemark"}>{calc ? "✓ " + calc.name : "未選択"}</span>
-          </div>
-          <div className="row">
-            <button className="primary" onClick={handleCheck} disabled={busy || (!drawing && !calc)}>
-              {busy ? "照合中... (20〜30秒)" : "整合チェック実行"}
-            </button>
-          </div>
-        </div>
-      )}
 
       {result && (
         <div className="card">
-          <h2><span className="badge">3</span>整合チェック結果 — 小梁</h2>
+          <h2><span className="badge">2</span>整合チェック結果 — 小梁</h2>
           <p className="hint">
-            「配筋不一致」「断面幅B不一致」は要修正候補、「要目視確認」はツールで確定できずPDF目視が必要なもの、
-            「図のみ／計算書のみ」は片方にしか存在しない符号です。各行の「図」「計算」ボタンで元PDFの該当箇所を表示できます。
+            「配筋不一致」「断面幅B不一致」は要修正候補、「要目視確認」はPDF目視が必要なもの、
+            「図のみ／計算書のみ」は片方にしか無い符号です。各行の「図」「計算」ボタンで元PDFを表示します。
           </p>
           <p>
             構造図: <b>{result.drawing_member_count}</b> 部材 /
             計算書: <b>{result.calc_member_count}</b> 部材 /
-            差分: <b>{result.diff_count}</b> 件
-            （表示中: <b>{filteredDiffs.length}</b> 件）
+            差分: <b>{result.diff_count}</b> 件（表示中: <b>{filteredDiffs.length}</b> 件）
           </p>
           <div className="row">
             <label><input type="checkbox" checked={hideFoundation} onChange={(e) => setHideFoundation(e.target.checked)} />
-              基礎部材（FB/FCG/FG）を除外
-            </label>
+              基礎部材（FB/FCG/FG）を除外</label>
             <label><input type="checkbox" checked={hideCantilever} onChange={(e) => setHideCantilever(e.target.checked)} />
-              片持小梁（CB/WCB）を除外
-            </label>
+              片持小梁（CB/WCB）を除外</label>
             <label><input type="checkbox" checked={hideWallBeam} onChange={(e) => setHideWallBeam(e.target.checked)} />
-              壁梁（WB）を除外
-            </label>
+              壁梁（WB）を除外</label>
             <label><input type="checkbox" checked={hideCalcOnly} onChange={(e) => setHideCalcOnly(e.target.checked)} />
-              「計算書のみ」を除外
-            </label>
+              「計算書のみ」を除外</label>
           </div>
           <DiffTable diffs={filteredDiffs} onHighlight={openHighlight} />
         </div>
@@ -184,7 +158,7 @@ export default function App() {
 
       {result && (
         <div className="card">
-          <h2><span className="badge">4</span>整合チェック結果 — スラブ</h2>
+          <h2><span className="badge">3</span>整合チェック結果 — スラブ</h2>
           <p>
             構造図: <b>{result.drawing_slab_count}</b> 枚 /
             計算書: <b>{result.calc_slab_count}</b> 枚 /
@@ -202,7 +176,7 @@ export default function App() {
               <button className="close" onClick={() => setHighlight(null)}>閉じる</button>
             </div>
             <div className="modal-body">
-              <img src={highlightUrl(highlight.projectId, highlight.role, highlight.loc)} alt={highlight.mark} />
+              <img src={highlightUrl(highlight.loc)} alt={highlight.mark} />
             </div>
           </div>
         </div>
@@ -211,9 +185,64 @@ export default function App() {
   );
 }
 
+function DropZone({
+  role, title, files, onUpload, onDelete,
+}: {
+  role: "drawing" | "calc";
+  title: string;
+  files: UploadInfo[];
+  onUpload: (role: "drawing" | "calc", files: File[]) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [over, setOver] = useState(false);
+  const inputId = `file-${role}`;
+
+  return (
+    <div className="dropzone-wrap">
+      <div className="dropzone-title">{title}</div>
+      <div
+        className={over ? "dropzone over" : "dropzone"}
+        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          onUpload(role, Array.from(e.dataTransfer.files));
+        }}
+        onClick={() => document.getElementById(inputId)?.click()}
+      >
+        <div className="dropzone-icon">＋</div>
+        <div className="dropzone-text">ここにPDFをドラッグ＆ドロップ</div>
+        <div className="dropzone-sub">またはクリックしてファイルを選ぶ（複数可）</div>
+        <input
+          id={inputId}
+          type="file"
+          accept="application/pdf"
+          multiple
+          style={{ display: "none" }}
+          onChange={(e) => {
+            onUpload(role, Array.from(e.target.files ?? []));
+            e.target.value = "";
+          }}
+        />
+      </div>
+      {files.length > 0 && (
+        <ul className="filelist">
+          {files.map((f) => (
+            <li key={f.id}>
+              <span className="filelist-name">{f.name}</span>
+              <button className="filelist-del" onClick={() => onDelete(f.id)} title="削除">×</button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {files.length === 0 && <div className="filelist-empty">まだファイルがありません</div>}
+    </div>
+  );
+}
+
 function DiffTable({
-  diffs,
-  onHighlight,
+  diffs, onHighlight,
 }: {
   diffs: Diff[];
   onHighlight: (role: "drawing" | "calc", loc: Locator | null | undefined, mark: string) => void;
@@ -232,11 +261,11 @@ function DiffTable({
               <b>{d.mark}</b>
               {d.fields.length === 0 && (
                 <div className="row" style={{ marginTop: 4 }}>
-                  {d.drawing_loc && (
-                    <button className="link" onClick={() => onHighlight("drawing", d.drawing_loc!, d.mark)}>図 p.{d.drawing_loc.page}</button>
+                  {d.drawing_loc?.file_id && (
+                    <button className="link" onClick={() => onHighlight("drawing", d.drawing_loc, d.mark)}>図 p.{d.drawing_loc.page}</button>
                   )}
-                  {d.calc_loc && (
-                    <button className="link" onClick={() => onHighlight("calc", d.calc_loc!, d.mark)}>計算 p.{d.calc_loc.page}</button>
+                  {d.calc_loc?.file_id && (
+                    <button className="link" onClick={() => onHighlight("calc", d.calc_loc, d.mark)}>計算 p.{d.calc_loc.page}</button>
                   )}
                 </div>
               )}
@@ -248,11 +277,11 @@ function DiffTable({
                 <div key={j} className="field-diff">
                   <code>{f.field}</code>: 図 <b>{f.drawing_value ?? "—"}</b> / 計算 <b>{f.calc_value ?? "—"}</b>
                   <span className="field-actions">
-                    {f.drawing_loc && (
-                      <button className="link" onClick={() => onHighlight("drawing", f.drawing_loc!, `${d.mark} / ${f.field}`)}>図</button>
+                    {f.drawing_loc?.file_id && (
+                      <button className="link" onClick={() => onHighlight("drawing", f.drawing_loc, `${d.mark} / ${f.field}`)}>図</button>
                     )}
-                    {f.calc_loc && (
-                      <button className="link" onClick={() => onHighlight("calc", f.calc_loc!, `${d.mark} / ${f.field}`)}>計算</button>
+                    {f.calc_loc?.file_id && (
+                      <button className="link" onClick={() => onHighlight("calc", f.calc_loc, `${d.mark} / ${f.field}`)}>計算</button>
                     )}
                   </span>
                 </div>

@@ -35,6 +35,7 @@ class LocationHint(BaseModel):
     """元PDFの位置情報。差分表示時のハイライト用。"""
     page: int
     bbox: Optional[tuple[float, float, float, float]] = None
+    file_id: Optional[str] = None  # どのアップロードファイル由来か（複数ファイル対応）
 
 
 class BeamMember(BaseModel):

@@ -2,12 +2,11 @@
 // 開発時 (vite dev) は VITE_API_BASE=http://localhost:8000 を指定する。
 const BASE = import.meta.env.VITE_API_BASE ?? "";
 
-export type Project = { id: number; name: string; created_at?: string };
-
 export type Locator = {
   page: number;
   bbox?: [number, number, number, number] | null;
   search?: string | null;
+  file_id?: string | null;
 };
 
 export type FieldDiff = {
@@ -19,7 +18,7 @@ export type FieldDiff = {
 };
 
 export type Diff = {
-  kind: string;     // "図のみ" / "計算書のみ" / "断面幅B不一致" / "配筋不一致"
+  kind: string;
   mark: string;
   fields: FieldDiff[];
   note?: string | null;
@@ -38,9 +37,10 @@ export type CheckResult = {
   slab_diffs: Diff[];
 };
 
-export function highlightUrl(projectId: number, role: "drawing" | "calc", loc: Locator): string {
+export type UploadInfo = { id: string; name: string; role: "drawing" | "calc" };
+
+export function highlightUrl(loc: Locator): string {
   const params = new URLSearchParams();
-  params.set("role", role);
   params.set("page", String(loc.page));
   if (loc.bbox) {
     params.set("x0", String(loc.bbox[0]));
@@ -49,32 +49,38 @@ export function highlightUrl(projectId: number, role: "drawing" | "calc", loc: L
     params.set("y1", String(loc.bbox[3]));
   }
   if (loc.search) params.set("search", loc.search);
-  return `${BASE}/api/projects/${projectId}/highlight?${params.toString()}`;
+  return `${BASE}/api/highlight/${loc.file_id}?${params.toString()}`;
 }
 
-export async function listProjects(): Promise<Project[]> {
-  const r = await fetch(`${BASE}/api/projects`);
+export async function listUploads(): Promise<{ drawing: UploadInfo[]; calc: UploadInfo[] }> {
+  const r = await fetch(`${BASE}/api/uploads`);
+  if (!r.ok) throw new Error("一覧の取得に失敗しました");
   return r.json();
 }
 
-export async function createProject(name: string): Promise<Project> {
-  const fd = new FormData();
-  fd.append("name", name);
-  const r = await fetch(`${BASE}/api/projects`, { method: "POST", body: fd });
-  return r.json();
-}
-
-export async function uploadFile(projectId: number, role: "drawing" | "calc", file: File) {
+export async function uploadFiles(role: "drawing" | "calc", files: File[]): Promise<UploadInfo[]> {
   const fd = new FormData();
   fd.append("role", role);
-  fd.append("file", file);
-  const r = await fetch(`${BASE}/api/projects/${projectId}/uploads`, { method: "POST", body: fd });
+  for (const f of files) fd.append("files", f);
+  const r = await fetch(`${BASE}/api/uploads`, { method: "POST", body: fd });
+  if (!r.ok) throw new Error("アップロードに失敗しました");
   return r.json();
 }
 
-export async function runCheck(projectId: number): Promise<CheckResult> {
-  const fd = new FormData();
-  fd.append("calc_software", "structuresuite");
-  const r = await fetch(`${BASE}/api/projects/${projectId}/check`, { method: "POST", body: fd });
+export async function deleteUpload(id: string): Promise<void> {
+  const r = await fetch(`${BASE}/api/uploads/${id}`, { method: "DELETE" });
+  if (!r.ok) throw new Error("削除に失敗しました");
+}
+
+export async function clearUploads(): Promise<void> {
+  await fetch(`${BASE}/api/uploads/clear`, { method: "POST" });
+}
+
+export async function runCheck(): Promise<CheckResult> {
+  const r = await fetch(`${BASE}/api/check`, { method: "POST" });
+  if (!r.ok) {
+    const msg = await r.text();
+    throw new Error(msg || "整合チェックに失敗しました");
+  }
   return r.json();
 }

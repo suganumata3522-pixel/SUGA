@@ -35,9 +35,6 @@ def _bundle_dir() -> Path:
 _DATA_DIR = _app_dir()
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_URL = os.environ.get("SUGA_DB_URL", f"sqlite:///{(_DATA_DIR / 'data' / 'suga.db').as_posix()}")
-(_DATA_DIR / "data").mkdir(parents=True, exist_ok=True)
-
 UPLOAD_DIR = Path(os.environ.get("SUGA_UPLOAD_DIR", str(_DATA_DIR / "uploads")))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 

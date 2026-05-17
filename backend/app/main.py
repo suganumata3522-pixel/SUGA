@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import io
-import shutil
-import uuid
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -10,15 +8,14 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from sqlmodel import select
 
 from .checker import Diff, compare, compare_slabs
-from .config import STATIC_DIR, UPLOAD_DIR
-from .db import Project, UploadedFile, get_session, init_db
-from .models import MemberSet
+from .config import STATIC_DIR
+from .models import MemberSet, SlabSet
 from .parsers import DrawingPdfParser, StructureSuitePdfParser, parse_calc_slabs, parse_drawing_slabs
+from .storage import clear_all, delete_upload, find_path, list_uploads, role_paths, save_upload
 
-app = FastAPI(title="SUGA - 構造図/計算書整合チェック", version="0.1.0")
+app = FastAPI(title="SUGA - 構造図/計算書整合チェック", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,77 +25,105 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
-
-
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/api/projects")
-def create_project(name: str = Form(...)) -> dict:
-    with get_session() as s:
-        p = Project(name=name)
-        s.add(p)
-        s.commit()
-        s.refresh(p)
-        return {"id": p.id, "name": p.name}
+# ---------------------------------------------------------------------------
+# アップロード管理（案件の概念なし・構造図/計算書を複数ファイル保持）
+# ---------------------------------------------------------------------------
+@app.get("/api/uploads")
+def get_uploads() -> dict:
+    """現在アップロード済みのファイル一覧。"""
+    items = list_uploads()
+    return {
+        "drawing": [i for i in items if i["role"] == "drawing"],
+        "calc": [i for i in items if i["role"] == "calc"],
+    }
 
 
-@app.get("/api/projects")
-def list_projects() -> list[dict]:
-    with get_session() as s:
-        items = s.exec(select(Project)).all()
-        return [{"id": p.id, "name": p.name, "created_at": p.created_at.isoformat()} for p in items]
-
-
-def _save_upload(file: UploadFile) -> Path:
-    suffix = Path(file.filename or "").suffix or ".pdf"
-    stored = UPLOAD_DIR / f"{uuid.uuid4().hex}{suffix}"
-    with stored.open("wb") as out:
-        shutil.copyfileobj(file.file, out)
-    return stored
-
-
-@app.post("/api/projects/{project_id}/uploads")
-def upload_file(project_id: int, role: str = Form(...), file: UploadFile = File(...)) -> dict:
+@app.post("/api/uploads")
+def upload(role: str = Form(...), files: list[UploadFile] = File(...)) -> list[dict]:
+    """構造図PDF または 計算書PDF を1つ以上アップロードする。"""
     if role not in {"drawing", "calc"}:
-        raise HTTPException(400, "role must be 'drawing' or 'calc'")
-    stored = _save_upload(file)
-    with get_session() as s:
-        rec = UploadedFile(
-            project_id=project_id,
-            role=role,
-            file_name=file.filename or stored.name,
-            stored_path=str(stored),
-        )
-        s.add(rec)
-        s.commit()
-        s.refresh(rec)
-        return {"id": rec.id, "file_name": rec.file_name, "role": rec.role}
+        raise HTTPException(400, "role は 'drawing' か 'calc'")
+    saved: list[dict] = []
+    for f in files:
+        data = f.file.read()
+        if not data:
+            continue
+        saved.append(save_upload(role, f.filename or "file.pdf", data))
+    if not saved:
+        raise HTTPException(400, "ファイルが空です")
+    return saved
 
 
-@app.post("/api/projects/{project_id}/check")
-def run_check(project_id: int, calc_software: str = Form("ss")) -> dict:
-    with get_session() as s:
-        uploads = s.exec(select(UploadedFile).where(UploadedFile.project_id == project_id)).all()
-    drawing = next((u for u in uploads if u.role == "drawing"), None)
-    calc = next((u for u in uploads if u.role == "calc"), None)
-    if not drawing or not calc:
-        raise HTTPException(400, "drawing と calc の両方をアップロードしてください")
+@app.delete("/api/uploads/{file_id}")
+def remove_upload(file_id: str) -> dict:
+    if not delete_upload(file_id):
+        raise HTTPException(404, "ファイルが見つかりません")
+    return {"ok": True}
 
-    drawing_set: MemberSet = DrawingPdfParser().parse(Path(drawing.stored_path))
-    calc_set: MemberSet = StructureSuitePdfParser().parse(Path(calc.stored_path))
-    _ = calc_software  # 将来 SS7/SS3 を実装したら分岐
+
+@app.post("/api/uploads/clear")
+def clear_uploads() -> dict:
+    clear_all()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# 整合チェック（アップロード済みの全ファイルを結合して照合）
+# ---------------------------------------------------------------------------
+def _parse_drawings() -> tuple[MemberSet, SlabSet]:
+    members = []
+    slabs = []
+    for fid, path in role_paths("drawing"):
+        ms = DrawingPdfParser().parse(path)
+        for m in ms.members:
+            if m.location:
+                m.location.file_id = fid
+        members.extend(ms.members)
+        ss = parse_drawing_slabs(path)
+        for s in ss.slabs:
+            if s.location:
+                s.location.file_id = fid
+        slabs.extend(ss.slabs)
+    return (
+        MemberSet(source="図", file_name="(構造図)", members=members),
+        SlabSet(source="図", file_name="(構造図)", slabs=slabs),
+    )
+
+
+def _parse_calcs() -> tuple[MemberSet, SlabSet]:
+    members = []
+    slabs = []
+    for fid, path in role_paths("calc"):
+        ms = StructureSuitePdfParser().parse(path)
+        for m in ms.members:
+            if m.location:
+                m.location.file_id = fid
+        members.extend(ms.members)
+        ss = parse_calc_slabs(path)
+        for s in ss.slabs:
+            if s.location:
+                s.location.file_id = fid
+        slabs.extend(ss.slabs)
+    return (
+        MemberSet(source="計算書", file_name="(計算書)", members=members),
+        SlabSet(source="計算書", file_name="(計算書)", slabs=slabs),
+    )
+
+
+@app.post("/api/check")
+def run_check() -> dict:
+    if not role_paths("drawing") or not role_paths("calc"):
+        raise HTTPException(400, "構造図PDFと計算書PDFを両方アップロードしてください")
+
+    drawing_set, drawing_slabs = _parse_drawings()
+    calc_set, calc_slabs = _parse_calcs()
 
     diffs: list[Diff] = compare(drawing_set, calc_set)
-
-    # スラブの整合チェック
-    drawing_slabs = parse_drawing_slabs(Path(drawing.stored_path))
-    calc_slabs = parse_calc_slabs(Path(calc.stored_path))
     slab_diffs: list[Diff] = compare_slabs(drawing_slabs, calc_slabs)
 
     return {
@@ -113,26 +138,12 @@ def run_check(project_id: int, calc_software: str = Form("ss")) -> dict:
     }
 
 
-def _uploaded_pdf_path(project_id: int, role: str) -> Path:
-    with get_session() as s:
-        upload = s.exec(
-            select(UploadedFile)
-            .where(UploadedFile.project_id == project_id)
-            .where(UploadedFile.role == role)
-            .order_by(UploadedFile.id.desc())
-        ).first()
-    if not upload:
-        raise HTTPException(404, f"{role} がアップロードされていません")
-    path = Path(upload.stored_path)
-    if not path.exists():
-        raise HTTPException(404, f"PDFファイルが見つかりません: {path}")
-    return path
-
-
-@app.get("/api/projects/{project_id}/highlight")
+# ---------------------------------------------------------------------------
+# PDFハイライト画像
+# ---------------------------------------------------------------------------
+@app.get("/api/highlight/{file_id}")
 def highlight(
-    project_id: int,
-    role: str = Query(..., pattern="^(drawing|calc)$"),
+    file_id: str,
     page: int = Query(1, ge=1),
     x0: float | None = None,
     y0: float | None = None,
@@ -141,8 +152,10 @@ def highlight(
     search: str | None = None,
     zoom: float = Query(2.0, ge=1.0, le=4.0),
 ) -> Response:
-    """指定ページを画像にレンダリングし、bbox or 検索ヒットを枠で強調して返す。"""
-    pdf_path = _uploaded_pdf_path(project_id, role)
+    """指定ファイルの指定ページを画像化し、bbox or 検索ヒットを枠で強調して返す。"""
+    pdf_path = find_path(file_id)
+    if pdf_path is None:
+        raise HTTPException(404, "ファイルが見つかりません")
     doc = fitz.open(pdf_path)
     try:
         if page > doc.page_count:
@@ -153,29 +166,22 @@ def highlight(
         if x0 is not None and y0 is not None and x1 is not None and y1 is not None:
             rects.append(fitz.Rect(x0, y0, x1, y1))
         elif search:
-            hits = pg.search_for(search)
-            # 範囲を少し膨らませる（前後行も含めて見やすく）
-            for r in hits:
+            for r in pg.search_for(search):
                 rects.append(fitz.Rect(r.x0 - 10, r.y0 - 4, r.x1 + 80, r.y1 + 4))
 
-        # 枠線を描画（オレンジ、太線）。
-        # pdfplumber は回転後の表示座標、search_for は表示座標を返すが、
-        # draw_rect は未回転の PDF 座標を要求するため derotation を適用する。
         derotate = pg.derotation_matrix
         for r in rects:
             pg.draw_rect(r * derotate, color=(1, 0.5, 0), width=2.5)
 
-        mat = fitz.Matrix(zoom, zoom)
-        pix = pg.get_pixmap(matrix=mat, alpha=False)
-        buf = io.BytesIO(pix.tobytes("png"))
-        return Response(content=buf.getvalue(), media_type="image/png")
+        pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        return Response(content=io.BytesIO(pix.tobytes("png")).getvalue(),
+                        media_type="image/png")
     finally:
         doc.close()
 
 
 # ---------------------------------------------------------------------------
-# フロントエンド（ビルド済み React）の配信
-# API ルートより後に登録することで /api/* を優先させる。
+# フロントエンド配信（API ルートの後に登録）
 # ---------------------------------------------------------------------------
 if STATIC_DIR.is_dir():
     _assets = STATIC_DIR / "assets"
@@ -188,7 +194,6 @@ if STATIC_DIR.is_dir():
 
     @app.get("/{full_path:path}")
     def _spa_fallback(full_path: str) -> FileResponse:
-        # 実ファイルがあればそれを、無ければ index.html を返す（SPA ルーティング）
         candidate = STATIC_DIR / full_path
         if candidate.is_file():
             return FileResponse(candidate)
