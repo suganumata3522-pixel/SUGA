@@ -1,81 +1,103 @@
 @echo off
 REM ===================================================================
-REM  SUGA.exe ビルドスクリプト
-REM  必要環境: Python 3.11+ / Node.js 20+
-REM  途中でエラーが出たら、その時点で止まり原因を表示します。
+REM  SUGA.exe build script  (ASCII only to avoid encoding issues)
+REM  Requires: Python 3.11+ and Node.js 20+
 REM ===================================================================
 setlocal
 cd /d "%~dp0.."
 echo.
-echo ====== SUGA.exe ビルド開始 ======
+echo ====== SUGA.exe build start ======
 echo.
 
-REM --- 前提チェック ---
-echo [確認] Python ...
+echo [check] Python version:
 python --version
-if errorlevel 1 (
-  echo.
-  echo [エラー] Python が見つかりません。Python 3.11+ をインストールし、
-  echo          インストール時に「Add Python to PATH」にチェックしてください。
-  goto error
-)
-echo [確認] Node.js ...
+if errorlevel 1 goto err_python
+
+echo [check] Node.js version:
 node --version
-if errorlevel 1 (
-  echo.
-  echo [エラー] Node.js が見つかりません。Node.js 20+ をインストールしてください。
-  goto error
-)
+if errorlevel 1 goto err_node
 echo.
 
-echo [1/4] フロントエンドをビルド...
+echo [1/4] Building frontend ...
 cd frontend
 call npm install
-if errorlevel 1 ( cd .. & echo [エラー] npm install に失敗 & goto error )
+if errorlevel 1 goto err_npm_install
 call npm run build
-if errorlevel 1 ( cd .. & echo [エラー] npm run build に失敗 & goto error )
+if errorlevel 1 goto err_npm_build
 cd ..
 echo.
 
-echo [2/4] フロントを backend\app\static へ配置...
+echo [2/4] Copying frontend to backend\app\static ...
 if exist backend\app\static rmdir /s /q backend\app\static
 xcopy /e /i /q frontend\dist backend\app\static
-if errorlevel 1 ( echo [エラー] フロントの配置に失敗 & goto error )
+if errorlevel 1 goto err_copy
 echo.
 
-echo [3/4] Python 依存と PyInstaller をインストール...
+echo [3/4] Installing Python deps and PyInstaller ...
 cd backend
 python -m pip install -e .
-if errorlevel 1 ( cd .. & echo [エラー] pip install -e . に失敗 & goto error )
+if errorlevel 1 goto err_pip
 python -m pip install pyinstaller
-if errorlevel 1 ( cd .. & echo [エラー] pyinstaller のインストールに失敗 & goto error )
+if errorlevel 1 goto err_pyinstaller_install
 echo.
 
-echo [4/4] SUGA.exe をビルド...
-REM pyinstaller コマンドが PATH に無くても動くよう python -m で呼ぶ
+echo [4/4] Building SUGA.exe with PyInstaller ...
 python -m PyInstaller suga.spec --noconfirm --clean
-if errorlevel 1 ( cd .. & echo [エラー] PyInstaller のビルドに失敗 & goto error )
+if errorlevel 1 goto err_pyinstaller_build
 cd ..
 echo.
 
-if not exist backend\dist\SUGA.exe (
-  echo [エラー] ビルドは進みましたが backend\dist\SUGA.exe が見つかりません。
-  goto error
-)
+if not exist backend\dist\SUGA.exe goto err_no_exe
 
 echo ===================================================================
-echo  完了: backend\dist\SUGA.exe が生成されました
-echo  このウィンドウを閉じて、SUGA.exe をダブルクリックしてください。
+echo  SUCCESS: backend\dist\SUGA.exe was created.
+echo  Close this window and double-click SUGA.exe to run.
 echo ===================================================================
 pause
 exit /b 0
 
-:error
+:err_python
+echo.
+echo [ERROR] Python not found. Install Python 3.11+ and check
+echo         "Add Python to PATH" during installation.
+goto end_error
+:err_node
+echo.
+echo [ERROR] Node.js not found. Install Node.js 20+.
+goto end_error
+:err_npm_install
+cd ..
+echo [ERROR] npm install failed.
+goto end_error
+:err_npm_build
+cd ..
+echo [ERROR] npm run build failed.
+goto end_error
+:err_copy
+echo [ERROR] Failed to copy frontend to backend\app\static.
+goto end_error
+:err_pip
+cd ..
+echo [ERROR] pip install -e . failed.
+goto end_error
+:err_pyinstaller_install
+cd ..
+echo [ERROR] pip install pyinstaller failed.
+goto end_error
+:err_pyinstaller_build
+cd ..
+echo [ERROR] PyInstaller build failed.
+goto end_error
+:err_no_exe
+echo [ERROR] Build finished but backend\dist\SUGA.exe was not found.
+goto end_error
+
+:end_error
 echo.
 echo ===================================================================
-echo  ビルドに失敗しました。
-echo  この黒い画面の文字を全て選択してコピーし、開発担当へ送ってください。
-echo  （ウィンドウ内で右クリック→すべて選択→Enter でコピーできます）
+echo  BUILD FAILED.
+echo  Select all text in this window (right-click - Select All - Enter)
+echo  and send it to the developer.
 echo ===================================================================
 pause
 exit /b 1
