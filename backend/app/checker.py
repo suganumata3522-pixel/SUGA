@@ -20,11 +20,12 @@ from .models import BeamMember, MemberSet, SlabMember, SlabSet
 class DiffKind(str, Enum):
     ONLY_IN_DRAWING = "図のみ"
     ONLY_IN_CALC = "計算書のみ"
-    SECTION_B_MISMATCH = "断面幅B不一致"
+    SECTION_B_MISMATCH = "断面幅不一致"
     REBAR_MISMATCH = "配筋不一致"
     NEEDS_REVIEW = "要目視確認"
     SLAB_THICKNESS_MISMATCH = "スラブ厚不一致"
     SLAB_REBAR_MISMATCH = "スラブ配筋不一致"
+    MATCH = "一致"
 
 
 class Locator(BaseModel):
@@ -98,6 +99,7 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
             ))
             continue
         c = c_map[mark]
+        before = len(diffs)
         # B 比較（両方に値がある場合のみ）
         if d.section.B is not None and c.section.B is not None and d.section.B != c.section.B:
             diffs.append(Diff(
@@ -135,6 +137,12 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
         elif rebar_fields:
             diffs.append(Diff(
                 kind=DiffKind.REBAR_MISMATCH, mark=mark, fields=rebar_fields, note=c.note,
+                drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
+            ))
+        # 不整合が1件も出なければ「一致」
+        if len(diffs) == before:
+            diffs.append(Diff(
+                kind=DiffKind.MATCH, mark=mark, note=c.note,
                 drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
             ))
 
@@ -186,6 +194,7 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
             diffs.append(Diff(kind=DiffKind.ONLY_IN_DRAWING, mark=mark, drawing_loc=_slab_loc(d)))
             continue
         c = c_map[mark]
+        before = len(diffs)
 
         # スラブ厚
         d_rng = _thickness_range(d.thickness_raw, d.thickness)
@@ -218,6 +227,12 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
         if rebar_fields:
             diffs.append(Diff(
                 kind=DiffKind.SLAB_REBAR_MISMATCH, mark=mark, fields=rebar_fields,
+                drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+            ))
+        # 不整合が1件も出なければ「一致」
+        if len(diffs) == before:
+            diffs.append(Diff(
+                kind=DiffKind.MATCH, mark=mark,
                 drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
             ))
 

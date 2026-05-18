@@ -38,7 +38,7 @@ def test_golden_sample(case_name: str) -> None:
     )
 
     diffs = compare(drawing, calc)
-    actual_keys = {(d.kind.value, d.mark) for d in diffs}
+    actual_keys = {(d.kind.value, d.mark) for d in diffs if d.kind.value != "一致"}
     expected_keys = expected["diff_keys"]
     extra = actual_keys - expected_keys
     missing = expected_keys - actual_keys
@@ -69,7 +69,7 @@ def test_golden_slab_sample(case_name: str) -> None:
     )
 
     diffs = compare_slabs(drawing, calc)
-    actual_keys = {(d.kind.value, d.mark) for d in diffs}
+    actual_keys = {(d.kind.value, d.mark) for d in diffs if d.kind.value != "一致"}
     expected_keys = expected["diff_keys"]
     extra = actual_keys - expected_keys
     missing = expected_keys - actual_keys

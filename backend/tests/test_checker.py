@@ -65,5 +65,8 @@ def test_no_diff_when_identical_rebar_set():
             PositionRebar(location="SX2端", top="4/2-D22", bottom="4-D22", stirrup="2-D10@150"),
         ]),
     ])
-    # B が同じ・配筋集合が同じなら差分なし
-    assert compare(drawing, calc) == []
+    # B が同じ・配筋集合が同じなら不整合なし → 「一致」が1件出る
+    diffs = compare(drawing, calc)
+    assert len(diffs) == 1
+    assert diffs[0].kind == DiffKind.MATCH
+    assert diffs[0].mark == "B1A"

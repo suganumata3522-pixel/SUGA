@@ -126,14 +126,17 @@ def run_check() -> dict:
     diffs: list[Diff] = compare(drawing_set, calc_set)
     slab_diffs: list[Diff] = compare_slabs(drawing_slabs, calc_slabs)
 
+    def _mismatch_count(items: list[Diff]) -> int:
+        return sum(1 for d in items if d.kind.value != "一致")
+
     return {
         "drawing_member_count": len(drawing_set.members),
         "calc_member_count": len(calc_set.members),
-        "diff_count": len(diffs),
+        "diff_count": _mismatch_count(diffs),
         "diffs": [d.model_dump() for d in diffs],
         "drawing_slab_count": len(drawing_slabs.slabs),
         "calc_slab_count": len(calc_slabs.slabs),
-        "slab_diff_count": len(slab_diffs),
+        "slab_diff_count": _mismatch_count(slab_diffs),
         "slab_diffs": [d.model_dump() for d in slab_diffs],
     }
 

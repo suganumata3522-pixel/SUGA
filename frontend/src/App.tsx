@@ -5,14 +5,21 @@ import {
 } from "./api";
 
 const KIND_COLORS: Record<string, string> = {
+  "一致": "diff-match",
   "図のみ": "diff-only",
   "計算書のみ": "diff-only",
-  "断面幅B不一致": "diff-section",
+  "断面幅不一致": "diff-section",
   "配筋不一致": "diff-rebar",
   "要目視確認": "diff-review",
   "スラブ厚不一致": "diff-section",
   "スラブ配筋不一致": "diff-rebar",
 };
+
+// 種別の表示順（不整合を上に、一致を最後に）
+const KIND_ORDER = [
+  "配筋不一致", "断面幅不一致", "スラブ配筋不一致", "スラブ厚不一致",
+  "要目視確認", "図のみ", "計算書のみ", "一致",
+];
 
 const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;
 const CANTILEVER_PREFIX = /^(?:CB|WCB)\d/;
@@ -20,19 +27,35 @@ const WALLBEAM_PREFIX = /^(?:WB)\d/;
 
 type HighlightTarget = { role: "drawing" | "calc"; loc: Locator; mark: string };
 
+function sortKinds(kinds: string[]): string[] {
+  return [...kinds].sort((a, b) => {
+    const ia = KIND_ORDER.indexOf(a), ib = KIND_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
+}
+
 export default function App() {
   const [uploads, setUploads] = useState<{ drawing: UploadInfo[]; calc: UploadInfo[] }>({ drawing: [], calc: [] });
   const [result, setResult] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hideFoundation, setHideFoundation] = useState(true);
-  const [hideCalcOnly, setHideCalcOnly] = useState(false);
   const [hideCantilever, setHideCantilever] = useState(false);
   const [hideWallBeam, setHideWallBeam] = useState(false);
+  // 非表示にする種別。既定で「一致」を隠す（不整合のみ表示）。
+  const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set(["一致"]));
   const [highlight, setHighlight] = useState<HighlightTarget | null>(null);
 
   const refresh = () => listUploads().then(setUploads).catch((e) => setError(String(e)));
   useEffect(() => { refresh(); }, []);
+
+  const toggleKind = (k: string) => {
+    setHiddenKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  };
 
   const handleUpload = async (role: "drawing" | "calc", files: File[]) => {
     const pdfs = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
@@ -72,16 +95,23 @@ export default function App() {
     }
   };
 
-  const filteredDiffs = useMemo<Diff[]>(() => {
+  // 小梁: 部材プレフィックス除外 + 種別フィルタ
+  const beamDiffs = useMemo<Diff[]>(() => {
     if (!result) return [];
     return result.diffs.filter((d) => {
       if (hideFoundation && FOUNDATION_PREFIX.test(d.mark)) return false;
       if (hideCantilever && CANTILEVER_PREFIX.test(d.mark)) return false;
       if (hideWallBeam && WALLBEAM_PREFIX.test(d.mark)) return false;
-      if (hideCalcOnly && d.kind === "計算書のみ") return false;
+      if (hiddenKinds.has(d.kind)) return false;
       return true;
     });
-  }, [result, hideFoundation, hideCantilever, hideWallBeam, hideCalcOnly]);
+  }, [result, hideFoundation, hideCantilever, hideWallBeam, hiddenKinds]);
+
+  // スラブ: 種別フィルタのみ
+  const slabDiffs = useMemo<Diff[]>(() => {
+    if (!result) return [];
+    return result.slab_diffs.filter((d) => !hiddenKinds.has(d.kind));
+  }, [result, hiddenKinds]);
 
   const openHighlight = (role: "drawing" | "calc", loc: Locator | null | undefined, mark: string) => {
     if (!loc || !loc.file_id) return;
@@ -134,25 +164,24 @@ export default function App() {
         <div className="card">
           <h2><span className="badge">2</span>整合チェック結果 — 小梁</h2>
           <p className="hint">
-            「配筋不一致」「断面幅B不一致」は要修正候補、「要目視確認」はPDF目視が必要なもの、
-            「図のみ／計算書のみ」は片方にしか無い符号です。各行の「図」「計算」ボタンで元PDFを表示します。
+            「配筋不一致」「断面幅不一致」は要修正候補、「要目視確認」はPDF目視が必要なもの、
+            「図のみ／計算書のみ」は片方にしか無い符号、「一致」は整合済みです。
+            各行の「図」「計算」ボタンで元PDFを表示します。
           </p>
           <p>
             構造図: <b>{result.drawing_member_count}</b> 部材 /
             計算書: <b>{result.calc_member_count}</b> 部材 /
-            差分: <b>{result.diff_count}</b> 件（表示中: <b>{filteredDiffs.length}</b> 件）
+            不整合: <b>{result.diff_count}</b> 件（表示中: <b>{beamDiffs.length}</b> 件）
           </p>
-          <div className="row">
-            <label><input type="checkbox" checked={hideFoundation} onChange={(e) => setHideFoundation(e.target.checked)} />
-              基礎部材（FB/FCG/FG）を除外</label>
-            <label><input type="checkbox" checked={hideCantilever} onChange={(e) => setHideCantilever(e.target.checked)} />
-              片持小梁（CB/WCB）を除外</label>
-            <label><input type="checkbox" checked={hideWallBeam} onChange={(e) => setHideWallBeam(e.target.checked)} />
-              壁梁（WB）を除外</label>
-            <label><input type="checkbox" checked={hideCalcOnly} onChange={(e) => setHideCalcOnly(e.target.checked)} />
-              「計算書のみ」を除外</label>
-          </div>
-          <DiffTable diffs={filteredDiffs} onHighlight={openHighlight} />
+          <FilterBar
+            diffs={result.diffs} hiddenKinds={hiddenKinds} onToggleKind={toggleKind}
+            prefixFilters={[
+              { label: "基礎部材（FB/FCG/FG）を除外", checked: hideFoundation, onChange: setHideFoundation },
+              { label: "片持小梁（CB/WCB）を除外", checked: hideCantilever, onChange: setHideCantilever },
+              { label: "壁梁（WB）を除外", checked: hideWallBeam, onChange: setHideWallBeam },
+            ]}
+          />
+          <DiffTable diffs={beamDiffs} onHighlight={openHighlight} />
         </div>
       )}
 
@@ -162,9 +191,10 @@ export default function App() {
           <p>
             構造図: <b>{result.drawing_slab_count}</b> 枚 /
             計算書: <b>{result.calc_slab_count}</b> 枚 /
-            差分: <b>{result.slab_diff_count}</b> 件
+            不整合: <b>{result.slab_diff_count}</b> 件（表示中: <b>{slabDiffs.length}</b> 件）
           </p>
-          <DiffTable diffs={result.slab_diffs} onHighlight={openHighlight} />
+          <FilterBar diffs={result.slab_diffs} hiddenKinds={hiddenKinds} onToggleKind={toggleKind} />
+          <DiffTable diffs={slabDiffs} onHighlight={openHighlight} />
         </div>
       )}
 
@@ -179,6 +209,41 @@ export default function App() {
               <img src={highlightUrl(highlight.loc)} alt={highlight.mark} />
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilterBar({
+  diffs, hiddenKinds, onToggleKind, prefixFilters,
+}: {
+  diffs: Diff[];
+  hiddenKinds: Set<string>;
+  onToggleKind: (k: string) => void;
+  prefixFilters?: { label: string; checked: boolean; onChange: (v: boolean) => void }[];
+}) {
+  const kinds = useMemo(() => sortKinds([...new Set(diffs.map((d) => d.kind))]), [diffs]);
+  return (
+    <div className="filterbar">
+      <div className="filter-group">
+        <span className="filter-label">表示する種別:</span>
+        {kinds.map((k) => (
+          <label key={k} className="kind-check">
+            <input type="checkbox" checked={!hiddenKinds.has(k)} onChange={() => onToggleKind(k)} />
+            <span className={`diff-kind ${KIND_COLORS[k] ?? ""}`}>{k}</span>
+          </label>
+        ))}
+      </div>
+      {prefixFilters && prefixFilters.length > 0 && (
+        <div className="filter-group">
+          <span className="filter-label">部材で除外:</span>
+          {prefixFilters.map((pf) => (
+            <label key={pf.label} className="kind-check">
+              <input type="checkbox" checked={pf.checked} onChange={(e) => pf.onChange(e.target.checked)} />
+              {pf.label}
+            </label>
+          ))}
         </div>
       )}
     </div>
@@ -248,7 +313,7 @@ function DiffTable({
   onHighlight: (role: "drawing" | "calc", loc: Locator | null | undefined, mark: string) => void;
 }) {
   if (diffs.length === 0) {
-    return <p className="muted">差分なし</p>;
+    return <p className="muted">表示できる項目がありません（フィルタを確認してください）</p>;
   }
   return (
     <table>

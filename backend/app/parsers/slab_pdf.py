@@ -129,6 +129,11 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
         for line in lines:
             hm = _RE_SLAB_HEADER.search(line)
             if hm:
+                # 計算書には小梁ブロック(No.X_B1 等)も含まれる。スラブ符号
+                # (S?? / CS??) 以外は小梁としてここでは扱わない。
+                if not _SLAB_MARK_RE.match(hm.group(1)):
+                    cur = None
+                    continue
                 cur = {
                     "mark": hm.group(1),
                     "note": hm.group(2),
