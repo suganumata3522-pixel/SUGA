@@ -206,7 +206,7 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                     kind=DiffKind.SLAB_THICKNESS_MISMATCH, mark=mark,
                     fields=[FieldDiff(
                         field="スラブ厚", drawing_value=d_disp, calc_value=f"{c.thickness}",
-                        drawing_loc=_slab_loc(d, "thickness"), calc_loc=_slab_loc(c),
+                        drawing_loc=_slab_loc(d, "thickness"), calc_loc=_slab_loc(c, "thickness"),
                     )],
                     drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
                 ))
@@ -222,7 +222,7 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                     drawing_value=" / ".join(sorted(ds)),
                     calc_value=" / ".join(sorted(cs)),
                     drawing_loc=_slab_loc(d, key),
-                    calc_loc=_slab_loc(c),
+                    calc_loc=_slab_loc(c, key),
                 ))
         if rebar_fields:
             diffs.append(Diff(

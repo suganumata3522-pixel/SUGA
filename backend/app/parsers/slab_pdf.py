@@ -116,17 +116,54 @@ _RE_FC = re.compile(r"Fc(\d+)")
 _RE_SUPPORT = re.compile(r"支持条件：([^,、]+)")
 
 
+def _group_lines(words: list[dict], tol: float = 2.5) -> list[list[dict]]:
+    """単語を y(top) で行にまとめ、各行を x0 昇順で返す。"""
+    if not words:
+        return []
+    sw = sorted(words, key=lambda w: (float(w["top"]), float(w["x0"])))
+    lines: list[list[dict]] = []
+    cur: list[dict] = [sw[0]]
+    cy = float(sw[0]["top"])
+    for w in sw[1:]:
+        wy = float(w["top"])
+        if abs(wy - cy) <= tol:
+            cur.append(w)
+        else:
+            lines.append(sorted(cur, key=lambda x: float(x["x0"])))
+            cur = [w]
+            cy = wy
+    lines.append(sorted(cur, key=lambda x: float(x["x0"])))
+    return lines
+
+
+def _span_bbox(ws: list[dict]) -> tuple[float, float, float, float]:
+    return (
+        min(float(w["x0"]) for w in ws),
+        min(float(w["top"]) for w in ws),
+        max(float(w["x1"]) for w in ws),
+        max(float(w["bottom"]) for w in ws),
+    )
+
+
+def _thickness_word_bbox(lw: list[dict]) -> tuple[float, float, float, float] | None:
+    """行内の "t = NNNmm" の語を見つけて bbox を返す（dt= は除外）。"""
+    for i, w in enumerate(lw):
+        if w["text"] == "t" and i + 2 < len(lw) and lw[i + 1]["text"] == "=" \
+           and re.match(r"^\d+\s*mm", lw[i + 2]["text"]):
+            return _span_bbox([lw[i], lw[i + 1], lw[i + 2]])
+    return None
+
+
 def parse_calc_slabs(pdf_path: Path) -> SlabSet:
     slabs: dict[str, SlabMember] = {}
     for pd in get_pages(pdf_path):
         page_idx = pd.index
-        text = pd.text
         # 「床のひび割れ」セクションは別フォーマットなので除外
-        if "床のひび割れ" in text:
+        if "床のひび割れ" in pd.text:
             continue
-        lines = [ln.rstrip() for ln in text.splitlines()]
         cur: dict | None = None
-        for line in lines:
+        for lw in _group_lines(pd.words):
+            line = " ".join(w["text"] for w in lw)
             hm = _RE_SLAB_HEADER.search(line)
             if hm:
                 # 計算書には小梁ブロック(No.X_B1 等)も含まれる。スラブ符号
@@ -140,11 +177,14 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                     "page": page_idx,
                     "t": None, "fc": None, "support": None,
                     "top": [], "bottom": [],
+                    "bboxes": {},
                 }
-                # ヘッダ行内に t / Fc がある場合もある
                 tm = _RE_T.search(line)
                 if tm:
                     cur["t"] = int(tm.group(1))
+                    tb = _thickness_word_bbox(lw)
+                    if tb:
+                        cur["bboxes"]["thickness"] = tb
                 _finalize_calc_slab(cur, slabs)
                 continue
             if cur is None:
@@ -152,6 +192,9 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
             tm = _RE_T.search(line)
             if tm and cur["t"] is None:
                 cur["t"] = int(tm.group(1))
+                tb = _thickness_word_bbox(lw)
+                if tb:
+                    cur["bboxes"]["thickness"] = tb
             fm = _RE_FC.search(line)
             if fm and cur["fc"] is None:
                 cur["fc"] = f"Fc{fm.group(1)}"
@@ -160,9 +203,15 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                 cur["support"] = sm.group(1)
             if line.startswith("上端筋"):
                 cur["top"] = _SLAB_REBAR_RE.findall(line)
+                rb = [w for w in lw if _SLAB_REBAR_RE.fullmatch(w["text"])]
+                if rb:
+                    cur["bboxes"]["top"] = _span_bbox(rb)
                 _finalize_calc_slab(cur, slabs)
             elif line.startswith("下端筋"):
                 cur["bottom"] = _SLAB_REBAR_RE.findall(line)
+                rb = [w for w in lw if _SLAB_REBAR_RE.fullmatch(w["text"])]
+                if rb:
+                    cur["bboxes"]["bottom"] = _span_bbox(rb)
                 _finalize_calc_slab(cur, slabs)
     return SlabSet(
         source=Source.CALC,
@@ -171,10 +220,22 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
     )
 
 
+def _block_bbox(bboxes: dict) -> tuple[float, float, float, float] | None:
+    """フィールド bbox 群を内包する矩形（スラブ厚〜配筋を覆う赤枠用）。"""
+    if not bboxes:
+        return None
+    xs0 = [b[0] for b in bboxes.values()]
+    ys0 = [b[1] for b in bboxes.values()]
+    xs1 = [b[2] for b in bboxes.values()]
+    ys1 = [b[3] for b in bboxes.values()]
+    return (min(xs0), min(ys0), max(xs1), max(ys1))
+
+
 def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
     """同一符号が複数ブロックに登場するため、符号単位でマージする。"""
     mark = cur["mark"]
     existing = slabs.get(mark)
+    bboxes = dict(cur.get("bboxes", {}))
     if existing is None:
         slabs[mark] = SlabMember(
             mark=mark,
@@ -185,7 +246,8 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
             concrete_grade=cur["fc"],
             support=cur["support"],
             source=Source.CALC,
-            location=LocationHint(page=cur["page"]),
+            location=LocationHint(page=cur["page"], bbox=_block_bbox(bboxes)),
+            field_bboxes=dict(bboxes),
             note=cur["note"] or None,
         )
     else:
@@ -203,3 +265,10 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
         for v in cur["bottom"]:
             if v not in existing.bottom_rebar:
                 existing.bottom_rebar.append(v)
+        # bbox は最初に座標が取れたブロックを優先しつつ、欠けたフィールドを補完
+        for k, v in bboxes.items():
+            existing.field_bboxes.setdefault(k, v)
+        if existing.location is not None and existing.location.bbox is None:
+            nb = _block_bbox(existing.field_bboxes)
+            if nb:
+                existing.location = LocationHint(page=existing.location.page, bbox=nb)

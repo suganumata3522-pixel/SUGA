@@ -337,20 +337,29 @@ class DrawingPdfParser(Parser):
 
             # 各 mark ごとに位置・配筋などを拾う
             for mi, ((x_lo, x_hi), mw) in enumerate(zip(bounds, mark_words_sorted)):
+                mark_x = float(mw["x0"])
                 if partition is not None:
                     my_labels = [pos_labels[idx] for idx in partition[mi]]
                     positions = self._extract_mark_positions(words, grp, my_labels)
                     lxs = [cx for cx, _ in my_labels]
-                    terr_lo = min(min(lxs) - 25, x_lo) if lxs else x_lo
-                    terr_hi = max(max(lxs) + 30, x_hi) if lxs else x_hi
+                    # 領域は「自分の位置ラベル群」を基準に決める。隣のマーク
+                    # （特に B3A のような3断面の幅広セル）の中点で決めた x_lo に
+                    # 引きずられて領域がずれないよう、セル境界は使わない。
+                    if lxs:
+                        terr_lo = min(min(lxs) - 28, mark_x - 8)
+                        terr_hi = max(max(lxs) + 32, mark_x + 22)
+                    else:
+                        terr_lo, terr_hi = x_lo, x_hi
+                    fc_lo, fc_hi = terr_lo, terr_hi
                     needs_review, review_note = False, None
                 else:
                     positions = self._extract_positions(words, grp, x_lo, x_hi)
                     terr_lo, terr_hi = x_lo, x_hi
+                    fc_lo, fc_hi = x_lo, x_hi
                     needs_review, review_note = self._detect_review_anomaly(
                         words, grp, x_lo, x_hi, positions)
-                fc_code = self._extract_fc_code(words, grp, x_lo, x_hi)
-                B = self._extract_section_B(words, grp, x_lo, x_hi)
+                fc_code = self._extract_fc_code(words, grp, fc_lo, fc_hi)
+                B = self._extract_section_B(words, grp, fc_lo, fc_hi)
                 field_bboxes = self._field_bboxes(grp, terr_lo, terr_hi)
                 out.append(BeamMember(
                     mark=mw["text"],
