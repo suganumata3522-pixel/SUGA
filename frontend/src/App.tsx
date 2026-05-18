@@ -141,12 +141,13 @@ export default function App() {
         <h2><span className="badge">1</span>PDFを入れる</h2>
         <p className="hint">
           構造図PDF・計算書PDFを下の枠にドラッグ＆ドロップ、または「ファイルを選ぶ」で追加します。
-          複数ファイル（複数ページの図面など）をまとめて入れられます。
+          複数ファイルをまとめて入れられます。
+          <b>計算書は「小梁計算書」と「スラブ計算書」の両方</b>を入れると、小梁・スラブ両方の照合ができます。
         </p>
         <div className="dropzones">
           <DropZone role="drawing" title="構造図PDF（二次部材リスト）"
                     files={uploads.drawing} onUpload={handleUpload} onDelete={handleDelete} />
-          <DropZone role="calc" title="計算書PDF（StructureSuite）"
+          <DropZone role="calc" title="計算書PDF（小梁計算書・スラブ計算書）"
                     files={uploads.calc} onUpload={handleUpload} onDelete={handleDelete} />
         </div>
         <div className="row">
@@ -188,6 +189,12 @@ export default function App() {
       {result && (
         <div className="card">
           <h2><span className="badge">3</span>整合チェック結果 — スラブ</h2>
+          {result.calc_slab_count === 0 && (
+            <div className="notice">
+              計算書側にスラブのデータが見つかりません。スラブの厚さ・配筋を照合するには、
+              「スラブ計算書PDF」も計算書欄にアップロードして再実行してください。
+            </div>
+          )}
           <p>
             構造図: <b>{result.drawing_slab_count}</b> 枚 /
             計算書: <b>{result.calc_slab_count}</b> 枚 /

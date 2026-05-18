@@ -125,6 +125,118 @@ def _split_by_breaks(ws: list[dict], breaks: list[float]) -> list[str]:
     return [_join_words(p) for p in parts]
 
 
+def _collect_pos_labels(words: list[dict], pos_y: float, x_min: float, x_max: float) -> list[tuple[float, str]]:
+    """位置 行の位置ラベルを (中心x, テキスト) で返す。「中」「央」は結合。"""
+    row = sorted(
+        [w for w in words
+         if abs(float(w["top"]) - pos_y) <= 4 and w["text"] != "位置"
+         and x_min <= float(w["x0"]) <= x_max],
+        key=lambda w: float(w["x0"]),
+    )
+    out: list[tuple[float, str]] = []
+    skip = False
+    for k, w in enumerate(row):
+        if skip:
+            skip = False
+            continue
+        if w["text"] == "中" and k + 1 < len(row) and row[k + 1]["text"] == "央":
+            nx = row[k + 1]
+            cx = (float(w["x0"]) + float(nx.get("x1", nx["x0"] + 6))) / 2
+            out.append((cx, "中央"))
+            skip = True
+        else:
+            cx = (float(w["x0"]) + float(w.get("x1", w["x0"] + 6))) / 2
+            out.append((cx, w["text"]))
+    return out
+
+
+def _rebar_pairs(words: list[dict], y: float, x_min: float, x_max: float) -> list[tuple[float, str]]:
+    """y 行・x 範囲内の鉄筋ペアを (中心x, 連結文字列) で返す。
+    "N" + "-D??" (+ "@???") を1つの値とみなす。
+    """
+    ws = sorted(
+        [w for w in words
+         if abs(float(w["top"]) - y) <= 4 and x_min <= float(w["x0"]) <= x_max],
+        key=lambda w: float(w["x0"]),
+    )
+    pairs: list[tuple[float, str]] = []
+    i = 0
+    while i < len(ws):
+        w = ws[i]
+        if re.match(r"^\d+(?:/\d+)?$", w["text"]) and i + 1 < len(ws) and ws[i + 1]["text"].startswith("-D"):
+            nxt = ws[i + 1]
+            toks = [w["text"], nxt["text"]]
+            cx = (float(w["x0"]) + float(nxt.get("x1", nxt["x0"] + 8))) / 2
+            j = i + 2
+            if j < len(ws) and re.match(r"^@\d+$", ws[j]["text"]):
+                toks.append(ws[j]["text"])
+                j += 1
+            pairs.append((cx, "".join(toks)))
+            i = j
+        else:
+            i += 1
+    return pairs
+
+
+_STRADDLE_PENALTY = 40.0
+
+
+def _partition_labels(labels: list[tuple[float, str]], mark_xs: list[float]) -> list[list[int]] | None:
+    """位置ラベル(x昇順)をマーク(x昇順)へ「連続区間」で割り当てる。
+
+    動的計画法で次のコストの総和を最小化する:
+      ・担当ラベル群の中心とマーク x の距離
+      ・「ラベル群がマークを左右から挟んでいない」ときのペナルティ
+        （元端/先端 や 端部/中央 はマークを挟む。挟まない=誤割当の疑い。
+          ただし「全断面」のような単独ラベルは 1 個でも正常）
+    各マークに最低1ラベル。ラベル数 < マーク数 なら割当不能で None。
+    返り値: マークごとのラベル index リスト。
+    """
+    n, m = len(labels), len(mark_xs)
+    if m == 0 or n < m:
+        return None
+    label_xs = [c for c, _ in labels]
+    label_txts = [t for _, t in labels]
+
+    def _seg_cost(k: int, i: int, mark_x: float) -> float:
+        xs = label_xs[k:i]
+        center = sum(xs) / len(xs)
+        cost = abs(center - mark_x)
+        if len(xs) == 1:
+            if "全断" not in label_txts[k]:
+                cost += _STRADDLE_PENALTY
+        else:
+            has_l = any(x < mark_x - 5 for x in xs)
+            has_r = any(x > mark_x + 5 for x in xs)
+            if not (has_l and has_r):
+                cost += _STRADDLE_PENALTY
+        return cost
+
+    INF = float("inf")
+    dp = [[INF] * (m + 1) for _ in range(n + 1)]
+    back = [[-1] * (m + 1) for _ in range(n + 1)]
+    dp[0][0] = 0.0
+    for j in range(1, m + 1):
+        for i in range(j, n - m + j + 1):
+            for k in range(j - 1, i):
+                if dp[k][j - 1] == INF:
+                    continue
+                c = dp[k][j - 1] + _seg_cost(k, i, mark_xs[j - 1])
+                if c < dp[i][j]:
+                    dp[i][j] = c
+                    back[i][j] = k
+    if dp[n][m] == INF:
+        return None
+    groups: list[list[int]] = []
+    i, j = n, m
+    while j > 0:
+        k = back[i][j]
+        groups.append(list(range(k, i)))
+        i, j = k, j - 1
+    groups.reverse()
+    return groups
+
+
 class DrawingPdfParser(Parser):
     """二次部材リスト（小梁・スラブ・壁）PDF 用パーサ。現在は小梁のみ抽出。"""
 
@@ -212,25 +324,86 @@ class DrawingPdfParser(Parser):
                 bounds = new_bounds
             mark_words_sorted = sorted(mark_words, key=lambda w: float(w["x0"]))
 
+            # 位置ラベルをマークへ DP 割り当て（連続区間）
+            pos_y = grp.get("位置")
+            pos_labels = (
+                _collect_pos_labels(words, pos_y, label_x0 + 30, right_limit)
+                if pos_y is not None else []
+            )
+            partition = (
+                _partition_labels(pos_labels, mark_xs_sorted)
+                if pos_labels else None
+            )
+
             # 各 mark ごとに位置・配筋などを拾う
-            for (x_lo, x_hi), mw in zip(bounds, mark_words_sorted):
-                positions = self._extract_positions(words, grp, x_lo, x_hi)
+            for mi, ((x_lo, x_hi), mw) in enumerate(zip(bounds, mark_words_sorted)):
+                if partition is not None:
+                    my_labels = [pos_labels[idx] for idx in partition[mi]]
+                    positions = self._extract_mark_positions(words, grp, my_labels)
+                    lxs = [cx for cx, _ in my_labels]
+                    terr_lo = min(min(lxs) - 25, x_lo) if lxs else x_lo
+                    terr_hi = max(max(lxs) + 30, x_hi) if lxs else x_hi
+                    needs_review, review_note = False, None
+                else:
+                    positions = self._extract_positions(words, grp, x_lo, x_hi)
+                    terr_lo, terr_hi = x_lo, x_hi
+                    needs_review, review_note = self._detect_review_anomaly(
+                        words, grp, x_lo, x_hi, positions)
                 fc_code = self._extract_fc_code(words, grp, x_lo, x_hi)
                 B = self._extract_section_B(words, grp, x_lo, x_hi)
-                field_bboxes = self._field_bboxes(grp, x_lo, x_hi)
-                needs_review, review_note = self._detect_review_anomaly(words, grp, x_lo, x_hi, positions)
+                field_bboxes = self._field_bboxes(grp, terr_lo, terr_hi)
                 out.append(BeamMember(
                     mark=mw["text"],
                     section=Section(B=B, D=None),
                     positions=positions,
                     fc_code=fc_code,
                     source=self.source,
-                    location=LocationHint(page=page_idx, bbox=(x_lo, y_top, x_hi, y_bot)),
+                    location=LocationHint(page=page_idx, bbox=(terr_lo, y_top, terr_hi, y_bot)),
                     field_bboxes=field_bboxes,
                     needs_review=needs_review,
                     review_note=review_note,
                 ))
         return out
+
+    def _extract_mark_positions(self, words, grp, my_labels) -> list[PositionRebar]:
+        """DP で割り当てた位置ラベル群から、各位置の配筋を抽出する。
+        位置ラベルと鉄筋値は同じ x に縦に並ぶため、各ラベル x に最も近い
+        鉄筋ペアをその位置の値とする。
+        """
+        label_xs = [cx for cx, _ in my_labels]
+        if not label_xs:
+            return []
+        win_lo = min(label_xs) - 28
+        win_hi = max(label_xs) + 32
+
+        def _vals(row_key: str) -> list[str | None]:
+            y = grp.get(row_key)
+            if y is None:
+                return [None] * len(label_xs)
+            pairs = _rebar_pairs(words, y, win_lo, win_hi)
+            if not pairs:
+                return [None] * len(label_xs)
+            if len(pairs) == 1:
+                # 1 値で全位置を覆う（STP・腹筋でよくある）
+                v = self._normalize_rebar(pairs[0][1])
+                return [v] * len(label_xs)
+            out: list[str | None] = []
+            for lx in label_xs:
+                best = min(pairs, key=lambda pr: abs(pr[0] - lx))
+                out.append(self._normalize_rebar(best[1]))
+            return out
+
+        tops = _vals("上端筋")
+        bots = _vals("下端筋")
+        stps = _vals("STP")
+        webs = _vals("腹筋")
+        return [
+            PositionRebar(
+                location=txt, top=tops[i], bottom=bots[i],
+                stirrup=stps[i], web=webs[i],
+            )
+            for i, (_, txt) in enumerate(my_labels)
+        ]
 
     @staticmethod
     def _detect_review_anomaly(words, grp, x_lo, x_hi, positions) -> tuple[bool, str | None]:
