@@ -6,7 +6,7 @@ import {
 
 const KIND_COLORS: Record<string, string> = {
   "一致": "diff-match",
-  "図のみ": "diff-only",
+  "構造図のみ": "diff-only",
   "計算書のみ": "diff-only",
   "断面幅不一致": "diff-section",
   "配筋不一致": "diff-rebar",
@@ -15,10 +15,13 @@ const KIND_COLORS: Record<string, string> = {
   "スラブ配筋不一致": "diff-rebar",
 };
 
-// 種別の表示順（不整合を上に、一致を最後に）
-const KIND_ORDER = [
-  "配筋不一致", "断面幅不一致", "スラブ配筋不一致", "スラブ厚不一致",
-  "要目視確認", "図のみ", "計算書のみ", "一致",
+// フィルタに常時表示する種別と順序（該当0件でも表示する）。
+// 不整合 → 一致 → 計算書のみ → 構造図のみ の順。
+const BEAM_KINDS = [
+  "配筋不一致", "断面幅不一致", "要目視確認", "一致", "計算書のみ", "構造図のみ",
+];
+const SLAB_KINDS = [
+  "スラブ配筋不一致", "スラブ厚不一致", "一致", "計算書のみ", "構造図のみ",
 ];
 
 const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;
@@ -26,13 +29,6 @@ const CANTILEVER_PREFIX = /^(?:CB|WCB)\d/;
 const WALLBEAM_PREFIX = /^(?:WB)\d/;
 
 type HighlightTarget = { role: "drawing" | "calc"; loc: Locator; mark: string };
-
-function sortKinds(kinds: string[]): string[] {
-  return [...kinds].sort((a, b) => {
-    const ia = KIND_ORDER.indexOf(a), ib = KIND_ORDER.indexOf(b);
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-  });
-}
 
 export default function App() {
   const [uploads, setUploads] = useState<{ drawing: UploadInfo[]; calc: UploadInfo[] }>({ drawing: [], calc: [] });
@@ -166,7 +162,7 @@ export default function App() {
           <h2><span className="badge">2</span>整合チェック結果 — 小梁</h2>
           <p className="hint">
             「配筋不一致」「断面幅不一致」は要修正候補、「要目視確認」はPDF目視が必要なもの、
-            「図のみ／計算書のみ」は片方にしか無い符号、「一致」は整合済みです。
+            「構造図のみ／計算書のみ」は片方にしか無い符号、「一致」は整合済みです。
             各行の「図」「計算」ボタンで元PDFを表示します。
           </p>
           <p>
@@ -175,7 +171,8 @@ export default function App() {
             不整合: <b>{result.diff_count}</b> 件（表示中: <b>{beamDiffs.length}</b> 件）
           </p>
           <FilterBar
-            diffs={result.diffs} hiddenKinds={hiddenKinds} onToggleKind={toggleKind}
+            diffs={result.diffs} allKinds={BEAM_KINDS}
+            hiddenKinds={hiddenKinds} onToggleKind={toggleKind}
             prefixFilters={[
               { label: "基礎部材（FB/FCG/FG）を除外", checked: hideFoundation, onChange: setHideFoundation },
               { label: "片持小梁（CB/WCB）を除外", checked: hideCantilever, onChange: setHideCantilever },
@@ -200,7 +197,9 @@ export default function App() {
             計算書: <b>{result.calc_slab_count}</b> 枚 /
             不整合: <b>{result.slab_diff_count}</b> 件（表示中: <b>{slabDiffs.length}</b> 件）
           </p>
-          <FilterBar diffs={result.slab_diffs} hiddenKinds={hiddenKinds} onToggleKind={toggleKind} />
+          <FilterBar
+            diffs={result.slab_diffs} allKinds={SLAB_KINDS}
+            hiddenKinds={hiddenKinds} onToggleKind={toggleKind} />
           <DiffTable diffs={slabDiffs} onHighlight={openHighlight} />
         </div>
       )}
@@ -223,22 +222,28 @@ export default function App() {
 }
 
 function FilterBar({
-  diffs, hiddenKinds, onToggleKind, prefixFilters,
+  diffs, allKinds, hiddenKinds, onToggleKind, prefixFilters,
 }: {
   diffs: Diff[];
+  allKinds: string[];
   hiddenKinds: Set<string>;
   onToggleKind: (k: string) => void;
   prefixFilters?: { label: string; checked: boolean; onChange: (v: boolean) => void }[];
 }) {
-  const kinds = useMemo(() => sortKinds([...new Set(diffs.map((d) => d.kind))]), [diffs]);
+  const counts = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const d of diffs) m[d.kind] = (m[d.kind] ?? 0) + 1;
+    return m;
+  }, [diffs]);
   return (
     <div className="filterbar">
       <div className="filter-group">
         <span className="filter-label">表示する種別:</span>
-        {kinds.map((k) => (
+        {allKinds.map((k) => (
           <label key={k} className="kind-check">
             <input type="checkbox" checked={!hiddenKinds.has(k)} onChange={() => onToggleKind(k)} />
             <span className={`diff-kind ${KIND_COLORS[k] ?? ""}`}>{k}</span>
+            <span className="kind-count">{counts[k] ?? 0}</span>
           </label>
         ))}
       </div>

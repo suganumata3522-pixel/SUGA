@@ -18,7 +18,7 @@ from .models import BeamMember, MemberSet, SlabMember, SlabSet
 
 
 class DiffKind(str, Enum):
-    ONLY_IN_DRAWING = "図のみ"
+    ONLY_IN_DRAWING = "構造図のみ"
     ONLY_IN_CALC = "計算書のみ"
     SECTION_B_MISMATCH = "断面幅不一致"
     REBAR_MISMATCH = "配筋不一致"
@@ -49,7 +49,7 @@ class Diff(BaseModel):
     mark: str
     fields: list[FieldDiff] = []
     note: str | None = None  # 計算書側の備考（例: "1F 駐輪場・ENT"）など補助情報
-    drawing_loc: Locator | None = None  # メンバ全体（"図のみ" 等）のハイライト
+    drawing_loc: Locator | None = None  # メンバ全体（"構造図のみ" 等）のハイライト
     calc_loc: Locator | None = None
 
 

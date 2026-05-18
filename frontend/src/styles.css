@@ -167,6 +167,12 @@ th { background: #f3f4f6; }
   font-size: 12px; color: #374151; cursor: pointer;
 }
 .kind-check input { margin: 0; }
+.kind-count {
+  min-width: 18px; text-align: center;
+  background: #e5e7eb; color: #374151;
+  border-radius: 9px; font-size: 11px; font-weight: 700;
+  padding: 0 5px;
+}
 .muted { color: #9ca3af; }
 .error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
 

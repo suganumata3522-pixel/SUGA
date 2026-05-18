@@ -94,6 +94,13 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
         if bot_y is not None:
             field_bboxes["bottom"] = (180.0, bot_y - 3, 330.0, bot_y + 7)
 
+        # 行全体の赤枠は「符号 + 上端筋行 + 下端筋行」を実測値で囲う。
+        # 符号 my に固定の ±9 だと、上下の配筋行がはみ出たり符号がずれる。
+        ys = [my, mw["bottom"]]
+        if top_y is not None:
+            ys.append(top_y - 3)
+        if bot_y is not None:
+            ys.append(bot_y + 7)
         out.append(SlabMember(
             mark=mw["text"],
             thickness=thickness,
@@ -101,7 +108,7 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
             top_rebar=top_rebar,
             bottom_rebar=bot_rebar,
             source=Source.DRAWING,
-            location=LocationHint(page=page_idx, bbox=(60.0, my - 9, 330.0, my + 9)),
+            location=LocationHint(page=page_idx, bbox=(60.0, min(ys) - 2, 330.0, max(ys) + 2)),
             field_bboxes=field_bboxes,
         ))
     return out
@@ -265,10 +272,12 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
         for v in cur["bottom"]:
             if v not in existing.bottom_rebar:
                 existing.bottom_rebar.append(v)
-        # bbox は最初に座標が取れたブロックを優先しつつ、欠けたフィールドを補完
+        # bbox は最初に座標が取れたブロックを優先しつつ、欠けたフィールドを補完。
+        # 全体枠(location.bbox)は上端筋・下端筋を拾うたびに更新する
+        # （上端筋確定時点で固定すると下端筋がはみ出てしまう）。
         for k, v in bboxes.items():
             existing.field_bboxes.setdefault(k, v)
-        if existing.location is not None and existing.location.bbox is None:
+        if existing.location is not None:
             nb = _block_bbox(existing.field_bboxes)
             if nb:
                 existing.location = LocationHint(page=existing.location.page, bbox=nb)
