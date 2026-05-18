@@ -86,13 +86,18 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
         top_rebar = _rebar_at(top_y)
         bot_rebar = _rebar_at(bot_y)
 
+        # フィールド単位の赤枠は、どのスラブの何の項目かが分かるよう
+        # 必ず符号列(x≈60〜)を含め、符号行＋対象の配筋行を縦に覆う。
+        sym_top, sym_bot = my, float(mw["bottom"])
         field_bboxes: dict[str, tuple[float, float, float, float]] = {
-            "thickness": (103.0, my - 4, 152.0, my + 6),
+            "thickness": (60.0, sym_top - 3, 330.0, sym_bot + 3),
         }
         if top_y is not None:
-            field_bboxes["top"] = (180.0, top_y - 3, 330.0, top_y + 7)
+            # 上端筋は符号の上の行 → 上端筋行〜符号下端まで
+            field_bboxes["top"] = (60.0, top_y - 3, 330.0, sym_bot + 3)
         if bot_y is not None:
-            field_bboxes["bottom"] = (180.0, bot_y - 3, 330.0, bot_y + 7)
+            # 下端筋は符号の下の行 → 符号上端〜下端筋行まで
+            field_bboxes["bottom"] = (60.0, sym_top - 3, 330.0, bot_y + 7)
 
         # 行全体の赤枠は「符号 + 上端筋行 + 下端筋行」を実測値で囲う。
         # 符号 my に固定の ±9 だと、上下の配筋行がはみ出たり符号がずれる。

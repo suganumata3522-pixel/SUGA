@@ -35,7 +35,7 @@ export default function App() {
   const [result, setResult] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hideFoundation, setHideFoundation] = useState(true);
+  const [hideFoundation, setHideFoundation] = useState(false);
   const [hideCantilever, setHideCantilever] = useState(false);
   const [hideWallBeam, setHideWallBeam] = useState(false);
   // 非表示にする種別。既定で「一致」を隠す（不整合のみ表示）。
