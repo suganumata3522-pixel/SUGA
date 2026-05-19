@@ -43,31 +43,83 @@ def parse_drawing_slabs(pdf_path: Path) -> SlabSet:
     return SlabSet(source=Source.DRAWING, file_name=pdf_path.name, slabs=slabs)
 
 
+def _find_slab_header(words: list[dict]) -> list[dict] | None:
+    """スラブリストのヘッダ行（"符号" と "主筋方向" を含む行）を返す。
+    小梁リストのヘッダは "主筋方向" を持たないため区別できる。"""
+    for line in _group_lines(words, tol=4.0):
+        texts = [w["text"] for w in line]
+        if "符号" in texts and any("主筋" in t for t in texts):
+            return line
+    return None
+
+
+def _slab_columns(header: list[dict]) -> dict[str, dict | None]:
+    """ヘッダ行から各列の語を得る。"""
+    def col(pred) -> dict | None:
+        return next((w for w in header if pred(w["text"])), None)
+    return {
+        "sym": col(lambda t: t == "符号"),
+        "thick": col(lambda t: "スラブ" in t or t == "厚"),
+        "pos": col(lambda t: t == "位置"),
+        "main": col(lambda t: "主筋" in t),
+        "dist": col(lambda t: "主筋" not in t and "筋方向" in t),
+        "bikou": col(lambda t: t.startswith("備")),
+    }
+
+
 def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
-    # スラブ符号を符号列（左端 x<110）で検出
-    mark_words = [
-        w for w in words
-        if _SLAB_MARK_RE.match(w["text"]) and float(w["x0"]) < 110
-    ]
+    # スラブリストは構造図ごとに列 x が異なるため、ヘッダ行から列位置を検出する。
+    header = _find_slab_header(words)
+    if header is None:
+        return []
+    cols = _slab_columns(header)
+    sym, thick, pos, main, dist, bikou = (
+        cols["sym"], cols["thick"], cols["pos"], cols["main"], cols["dist"], cols["bikou"]
+    )
+    if sym is None or main is None:
+        return []
+    header_y = min(float(w["top"]) for w in header)
+    sym_x = float(sym["x0"])
+
+    # 各列の x レンジ（ヘッダ語を基準に相対オフセットで決める）
+    thick_lo = float(thick["x0"]) - 25 if thick else sym_x + 30
+    thick_hi = float(thick["x1"]) + 14 if thick else sym_x + 95
+    pos_lo = float(pos["x0"]) - 8 if pos else None
+    pos_hi = float(pos["x0"]) + 24 if pos else None
+    rebar_lo = float(main["x0"]) - 32
+    rebar_hi = (float(dist["x1"]) + 18) if dist else (float(main["x1"]) + 90)
+    box_left = sym_x - 6
+    box_right = (float(bikou["x0"]) - 4) if bikou else rebar_hi + 6
+
+    # スラブ符号を符号列付近・ヘッダより下で検出
+    mark_words = sorted(
+        [w for w in words
+         if _SLAB_MARK_RE.match(w["text"])
+         and (sym_x - 7) <= float(w["x0"]) <= (sym_x + 34)
+         and float(w["top"]) > header_y + 4],
+        key=lambda w: float(w["top"]),
+    )
     if not mark_words:
         return []
-    mark_words.sort(key=lambda w: float(w["top"]))
 
-    # 上端筋/下端筋ラベルの位置（x≈162）
-    label_words = [w for w in words if w["text"] in {"上端筋", "下端筋"} and 150 <= float(w["x0"]) <= 180]
+    # 上端筋/下端筋ラベル（位置列付近）
+    label_words = [
+        w for w in words
+        if w["text"] in {"上端筋", "下端筋"}
+        and (pos_lo is None or pos_lo <= float(w["x0"]) <= pos_hi)
+    ]
 
     out: list[SlabMember] = []
     for mw in mark_words:
         my = float(mw["top"])
-        # この符号バンドの 上端筋/下端筋 ラベル（my ± 8）
         band_labels = [lw for lw in label_words if abs(float(lw["top"]) - my) <= 9]
         top_y = next((float(lw["top"]) for lw in band_labels if lw["text"] == "上端筋"), None)
         bot_y = next((float(lw["top"]) for lw in band_labels if lw["text"] == "下端筋"), None)
 
-        # スラブ厚（x 105〜150、my±4）
+        # スラブ厚（厚さ列・符号行）
         thick_raw = None
         for w in words:
-            if 103 <= float(w["x0"]) <= 152 and abs(float(w["top"]) - my) <= 4:
+            if thick_lo <= float(w["x0"]) <= thick_hi and abs(float(w["top"]) - my) <= 4:
                 if re.match(r"^[\d〜～\-]+$", w["text"]):
                     thick_raw = w["text"]
                     break
@@ -78,30 +130,26 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
                 return []
             vals: list[str] = []
             for w in words:
-                if abs(float(w["top"]) - y) <= 3 and 180 <= float(w["x0"]) <= 320:
-                    for m in _SLAB_REBAR_RE.findall(w["text"]):
-                        vals.append(m)
+                if abs(float(w["top"]) - y) <= 3 and rebar_lo <= float(w["x0"]) <= rebar_hi:
+                    vals.extend(_SLAB_REBAR_RE.findall(w["text"]))
             return vals
 
         top_rebar = _rebar_at(top_y)
         bot_rebar = _rebar_at(bot_y)
 
         # フィールド単位の赤枠は、どのスラブの何の項目かが分かるよう
-        # 必ず符号列(x≈60〜)を含め、符号行＋対象の配筋行を縦に覆う。
+        # 必ず符号列を含め、符号行＋対象の配筋行を縦に覆う。
         sym_top, sym_bot = my, float(mw["bottom"])
         field_bboxes: dict[str, tuple[float, float, float, float]] = {
-            "thickness": (60.0, sym_top - 3, 330.0, sym_bot + 3),
+            "thickness": (box_left, sym_top - 3, box_right, sym_bot + 3),
         }
         if top_y is not None:
-            # 上端筋は符号の上の行 → 上端筋行〜符号下端まで
-            field_bboxes["top"] = (60.0, top_y - 3, 330.0, sym_bot + 3)
+            field_bboxes["top"] = (box_left, top_y - 3, box_right, sym_bot + 3)
         if bot_y is not None:
-            # 下端筋は符号の下の行 → 符号上端〜下端筋行まで
-            field_bboxes["bottom"] = (60.0, sym_top - 3, 330.0, bot_y + 7)
+            field_bboxes["bottom"] = (box_left, sym_top - 3, box_right, bot_y + 7)
 
         # 行全体の赤枠は「符号 + 上端筋行 + 下端筋行」を実測値で囲う。
-        # 符号 my に固定の ±9 だと、上下の配筋行がはみ出たり符号がずれる。
-        ys = [my, mw["bottom"]]
+        ys = [my, sym_bot]
         if top_y is not None:
             ys.append(top_y - 3)
         if bot_y is not None:
@@ -113,7 +161,7 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
             top_rebar=top_rebar,
             bottom_rebar=bot_rebar,
             source=Source.DRAWING,
-            location=LocationHint(page=page_idx, bbox=(60.0, min(ys) - 2, 330.0, max(ys) + 2)),
+            location=LocationHint(page=page_idx, bbox=(box_left, min(ys) - 2, box_right, max(ys) + 2)),
             field_bboxes=field_bboxes,
         ))
     return out
