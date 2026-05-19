@@ -238,6 +238,9 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                     "t": None, "fc": None, "support": None,
                     "top": [], "bottom": [],
                     "bboxes": {},
+                    # 符号を含むヘッダ行(No.X_Sxx ...)の bbox。各フィールド枠を
+                    # 縦に伸ばして符号が必ず見えるようにするために使う。
+                    "header_bbox": _span_bbox(lw),
                 }
                 tm = _RE_T.search(line)
                 if tm:
@@ -291,11 +294,24 @@ def _block_bbox(bboxes: dict) -> tuple[float, float, float, float] | None:
     return (min(xs0), min(ys0), max(xs1), max(ys1))
 
 
+def _expand_with_header(field_bbox, header):
+    """フィールド bbox を、符号を含むヘッダ行まで縦・横に拡げる。
+    PDF照合ビューで「どのスラブの何の情報か」が一目で分かるようにする。"""
+    if not header:
+        return field_bbox
+    hx0, hy0, hx1, _hy1 = header
+    fx0, _fy0, fx1, fy1 = field_bbox
+    return (min(hx0, fx0), hy0, max(hx1, fx1), fy1)
+
+
 def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
     """同一符号が複数ブロックに登場するため、符号単位でマージする。"""
     mark = cur["mark"]
     existing = slabs.get(mark)
-    bboxes = dict(cur.get("bboxes", {}))
+    header = cur.get("header_bbox")
+    raw_bboxes = cur.get("bboxes", {})
+    # 全フィールド枠にヘッダ行(符号)を含める
+    bboxes = {k: _expand_with_header(v, header) for k, v in raw_bboxes.items()}
     if existing is None:
         slabs[mark] = SlabMember(
             mark=mark,

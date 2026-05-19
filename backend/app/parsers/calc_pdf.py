@@ -258,30 +258,56 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
         if not sub_label_y:
             continue
 
-        # mark 列の x 範囲
-        col_ranges: list[tuple[str, float, float]] = []
-        marks_used = sorted(mark_words, key=lambda w: float(w["x0"]))
-        for k, mw in enumerate(marks_used):
-            x = float(mw["x0"])
-            if k + 1 < len(marks_used):
-                hi = (x + float(marks_used[k + 1]["x0"])) / 2
-            else:
-                hi = x + 130  # 最右セル: 130pt 程度
-            lo = x - 5
-            col_ranges.append((mw["text"], lo, hi))
+        # 左ラベル列(位置/断面/主筋/下/ST. 等)の左端 x
+        label_x_lo = None
+        for rj in range(ri + 1, len(rows)):
+            y2, row2 = rows[rj]
+            if not row2:
+                continue
+            first = row2[0]
+            if first["text"] in label_keys:
+                lx = float(first["x0"])
+                if label_x_lo is None or lx < label_x_lo:
+                    label_x_lo = lx
+            if first["text"] in {"符号"} or first["text"].startswith("No.") or first["text"].startswith("断面計算"):
+                break
+        if label_x_lo is None:
+            label_x_lo = float(row_words[0]["x0"])
+
+        # mark ごとに、このページ内の全カラム x を集約して左右端を決める
+        by_mark: dict[str, list[float]] = {}
+        for mw in mark_words:
+            by_mark.setdefault(mw["text"], []).append(float(mw["x0"]))
+        # 同じ "符号" 行に他 mark のセル境界がある場合は、それを右端制限に使う
+        all_mark_xs = sorted({float(mw["x0"]) for mw in mark_words})
+
+        y_top = y - 5
+        y_bot = max(sub_label_y.values()) + 18
 
         # 同一ページで該当 mark のメンバに最初に bbox を付与（既に付与済みならスキップ）
-        for mark_text, x_lo, x_hi in col_ranges:
+        for mark_text, xs in by_mark.items():
             target = next((m for m in members if m.mark == mark_text and not m.field_bboxes), None)
             if target is None:
-                # 既に bbox がある場合はスキップ（最初に登場したブロックを優先）
                 continue
+            xs_sorted = sorted(xs)
+            mark_lo = xs_sorted[0]
+            mark_hi_x = xs_sorted[-1]
+            # この mark の最右カラムの右端：同じ符号行で次の mark との中点、無ければ +135pt
+            others_right = [x for x in all_mark_xs if x > mark_hi_x]
+            if others_right:
+                cell_hi = (mark_hi_x + others_right[0]) / 2
+            else:
+                cell_hi = mark_hi_x + 135
+            x_lo = min(label_x_lo, mark_lo) - 3
+            x_hi = cell_hi + 4
+
             field_bboxes: dict[str, tuple[float, float, float, float]] = {}
             for key, ly in sub_label_y.items():
-                field_bboxes[key] = (x_lo, ly - 3, x_hi, ly + 10)
+                # 各フィールド枠も左ラベル〜全カラムを横に含める（行頭の項目名と
+                # 値が同時に見えるように）。縦はその行のみ。
+                field_bboxes[key] = (x_lo, ly - 4, x_hi, ly + 12)
             target.field_bboxes = field_bboxes
-            # location も最初の符号行に揃える
-            target.location = LocationHint(page=page_idx, bbox=(x_lo, y - 3, x_hi, max(sub_label_y.values()) + 14))
+            target.location = LocationHint(page=page_idx, bbox=(x_lo, y_top, x_hi, y_bot))
 
 
 # 後方互換用

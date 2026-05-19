@@ -367,7 +367,7 @@ class DrawingPdfParser(Parser):
                     positions=positions,
                     fc_code=fc_code,
                     source=self.source,
-                    location=LocationHint(page=page_idx, bbox=(terr_lo, y_top, terr_hi, y_bot)),
+                    location=LocationHint(page=page_idx, bbox=(terr_lo, y_top - 5, terr_hi, y_bot - 2)),
                     field_bboxes=field_bboxes,
                     needs_review=needs_review,
                     review_note=review_note,
