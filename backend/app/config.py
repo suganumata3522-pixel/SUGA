@@ -40,3 +40,9 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # フロントエンドのビルド成果物 (app/static/)。build スクリプトが配置する。
 STATIC_DIR = _bundle_dir() / "static"
+
+# 同梱アセット (assets/fonts/ipag.ttf など)。レポートPDFの日本語描画に使う。
+if _is_frozen():
+    ASSETS_DIR = _bundle_dir() / "app" / "assets"
+else:
+    ASSETS_DIR = Path(__file__).resolve().parent / "assets"

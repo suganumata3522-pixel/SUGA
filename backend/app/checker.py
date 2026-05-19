@@ -32,6 +32,9 @@ class Locator(BaseModel):
     """元PDF内の位置情報。UI側がハイライトAPIに渡す。"""
     page: int
     bbox: tuple[float, float, float, float] | None = None
+    # 差分位置（フィールド単位の bbox）。bbox は部材全体(橙)、diff_bbox は
+    # 差分箇所(赤)として2色で描画する。
+    diff_bbox: tuple[float, float, float, float] | None = None
     search: str | None = None  # bbox が無い時に使う検索語（通常は符号）
     file_id: str | None = None  # どのアップロードPDFか
 
@@ -78,12 +81,20 @@ def _calc_loc(c: BeamMember | None) -> Locator | None:
 
 
 def _field_loc(m: BeamMember | None, key: str) -> Locator | None:
-    """フィールド単位の bbox。なければメンバ全体に fallback。"""
+    """フィールド単位の Locator。
+
+    bbox = 部材全体（PDF照合の表示範囲・橙枠）、
+    diff_bbox = そのフィールドの bbox（差分の赤枠）。
+    フィールド bbox が無いときは部材全体だけを返す。
+    """
     if m is None or m.location is None:
         return None
-    bbox = m.field_bboxes.get(key) or m.location.bbox
-    return Locator(page=m.location.page, bbox=bbox, search=m.mark,
-                   file_id=m.location.file_id)
+    member_bb = m.location.bbox
+    field_bb = m.field_bboxes.get(key)
+    primary = member_bb or field_bb
+    diff = field_bb if (field_bb and field_bb != member_bb) else None
+    return Locator(page=m.location.page, bbox=primary, diff_bbox=diff,
+                   search=m.mark, file_id=m.location.file_id)
 
 
 # 通り芯参照（X1 / Y2 等）の検出パターン。
@@ -194,9 +205,16 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
 def _slab_loc(s: SlabMember | None, key: str | None = None) -> Locator | None:
     if s is None or s.location is None:
         return None
-    bbox = (s.field_bboxes.get(key) if key else s.location.bbox) or s.location.bbox
-    return Locator(page=s.location.page, bbox=bbox, search=s.mark,
-                   file_id=s.location.file_id)
+    member_bb = s.location.bbox
+    if key:
+        field_bb = s.field_bboxes.get(key)
+        primary = member_bb or field_bb
+        diff = field_bb if (field_bb and field_bb != member_bb) else None
+    else:
+        primary = member_bb
+        diff = None
+    return Locator(page=s.location.page, bbox=primary, diff_bbox=diff,
+                   search=s.mark, file_id=s.location.file_id)
 
 
 def _ordered_unique(vals: list[str]) -> list[str]:

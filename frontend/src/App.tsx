@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   CheckResult, Diff, Locator, UploadInfo,
-  clearUploads, deleteUpload, highlightUrl, listUploads, runCheck, uploadFiles,
+  clearUploads, deleteUpload, highlightUrl, listUploads, reportUrl, runCheck, uploadFiles,
 } from "./api";
 
 const KIND_COLORS: Record<string, string> = {
@@ -41,6 +41,7 @@ export default function App() {
   // 非表示にする種別。既定で「一致」を隠す（不整合のみ表示）。
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set(["一致"]));
   const [highlight, setHighlight] = useState<CompareTarget | null>(null);
+  const [reporting, setReporting] = useState(false);
 
   const refresh = () => listUploads().then(setUploads).catch((e) => setError(String(e)));
   useEffect(() => { refresh(); }, []);
@@ -114,6 +115,32 @@ export default function App() {
     setHighlight({ mark, drawing, calc });
   };
 
+  const handleReport = async () => {
+    setReporting(true);
+    setError(null);
+    try {
+      const r = await fetch(reportUrl());
+      if (!r.ok) {
+        const msg = await r.text();
+        throw new Error(msg || "レポート生成に失敗しました");
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
+      a.href = url;
+      a.download = `suga_report_${ts}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setReporting(false);
+    }
+  };
+
   const canCheck = uploads.drawing.length > 0 && uploads.calc.length > 0;
 
   return (
@@ -159,11 +186,17 @@ export default function App() {
 
       {result && (
         <div className="card">
-          <h2><span className="badge">2</span>整合チェック結果 — 小梁</h2>
+          <div className="card-h2-row">
+            <h2><span className="badge">2</span>整合チェック結果 — 小梁</h2>
+            <button className="secondary" onClick={handleReport} disabled={reporting}>
+              {reporting ? "レポート生成中... (20〜40秒)" : "全件まとめてPDF出力"}
+            </button>
+          </div>
           <p className="hint">
             「配筋不一致」「断面幅不一致」は要修正候補、「要目視確認」はPDF目視が必要なもの、
             「構造図のみ／計算書のみ」は片方にしか無い符号、「一致」は整合済みです。
             各行の「PDFで照合」ボタンで構造図と計算書の該当箇所を並べて表示します。
+            <b>「全件まとめてPDF出力」</b>で全差分を1つのPDFにまとめてダウンロードできます。
           </p>
           <p>
             構造図: <b>{result.drawing_member_count}</b> 部材 /

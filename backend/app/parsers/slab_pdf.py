@@ -137,16 +137,16 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
         top_rebar = _rebar_at(top_y)
         bot_rebar = _rebar_at(bot_y)
 
-        # フィールド単位の赤枠は、どのスラブの何の項目かが分かるよう
-        # 必ず符号列を含め、符号行＋対象の配筋行を縦に覆う。
+        # フィールド単位の枠（差分の赤枠）は対象行のみをタイトに囲う。
+        # 部材全体枠（橙）は location.bbox 側で符号〜配筋を覆う。
         sym_top, sym_bot = my, float(mw["bottom"])
         field_bboxes: dict[str, tuple[float, float, float, float]] = {
             "thickness": (box_left, sym_top - 3, box_right, sym_bot + 3),
         }
         if top_y is not None:
-            field_bboxes["top"] = (box_left, top_y - 3, box_right, sym_bot + 3)
+            field_bboxes["top"] = (box_left, top_y - 3, box_right, top_y + 7)
         if bot_y is not None:
-            field_bboxes["bottom"] = (box_left, sym_top - 3, box_right, bot_y + 7)
+            field_bboxes["bottom"] = (box_left, bot_y - 3, box_right, bot_y + 7)
 
         # 行全体の赤枠は「符号 + 上端筋行 + 下端筋行」を実測値で囲う。
         ys = [my, sym_bot]
@@ -294,25 +294,30 @@ def _block_bbox(bboxes: dict) -> tuple[float, float, float, float] | None:
     return (min(xs0), min(ys0), max(xs1), max(ys1))
 
 
-def _expand_with_header(field_bbox, header):
-    """フィールド bbox を、符号を含むヘッダ行まで縦・横に拡げる。
-    PDF照合ビューで「どのスラブの何の情報か」が一目で分かるようにする。"""
-    if not header:
-        return field_bbox
-    hx0, hy0, hx1, _hy1 = header
-    fx0, _fy0, fx1, fy1 = field_bbox
-    return (min(hx0, fx0), hy0, max(hx1, fx1), fy1)
+def _bbox_union(bboxes: list[tuple[float, float, float, float] | None]) -> tuple[float, float, float, float] | None:
+    """bbox 群を内包する矩形。None や空は無視。"""
+    bbs = [b for b in bboxes if b]
+    if not bbs:
+        return None
+    return (min(b[0] for b in bbs), min(b[1] for b in bbs),
+            max(b[2] for b in bbs), max(b[3] for b in bbs))
 
 
 def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
-    """同一符号が複数ブロックに登場するため、符号単位でマージする。"""
+    """同一符号が複数ブロックに登場するため、符号単位でマージする。
+
+    field_bboxes は各フィールド（厚さ/上端筋/下端筋）の行のみをタイトに保持し、
+    差分（赤枠）の表示に使う。location.bbox はヘッダ行（符号を含む）と全
+    フィールドの和をとった部材全体枠（橙枠）として、PDF 照合の切り出し範囲・
+    部材全体表示に使う。
+    """
     mark = cur["mark"]
     existing = slabs.get(mark)
     header = cur.get("header_bbox")
-    raw_bboxes = cur.get("bboxes", {})
-    # 全フィールド枠にヘッダ行(符号)を含める
-    bboxes = {k: _expand_with_header(v, header) for k, v in raw_bboxes.items()}
+    bboxes = dict(cur.get("bboxes", {}))  # フィールド枠はタイトのまま
     if existing is None:
+        # 全体枠 = ヘッダ + 各フィールドの和
+        envelope = _bbox_union([header, *bboxes.values()])
         slabs[mark] = SlabMember(
             mark=mark,
             thickness=cur["t"],
@@ -322,7 +327,7 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
             concrete_grade=cur["fc"],
             support=cur["support"],
             source=Source.CALC,
-            location=LocationHint(page=cur["page"], bbox=_block_bbox(bboxes)),
+            location=LocationHint(page=cur["page"], bbox=envelope),
             field_bboxes=dict(bboxes),
             note=cur["note"] or None,
         )
@@ -341,12 +346,14 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
         for v in cur["bottom"]:
             if v not in existing.bottom_rebar:
                 existing.bottom_rebar.append(v)
-        # bbox は最初に座標が取れたブロックを優先しつつ、欠けたフィールドを補完。
-        # 全体枠(location.bbox)は上端筋・下端筋を拾うたびに更新する
-        # （上端筋確定時点で固定すると下端筋がはみ出てしまう）。
+        # フィールド枠は最初に座標が取れたブロックを優先しつつ、欠けたフィールドを補完。
+        # 同一スラブが複数ブロックに登場するため、既に bbox があるフィールドは
+        # 上書きしない（最初のブロックの座標を採用）。
+        new_bbs = [v for k, v in bboxes.items() if k not in existing.field_bboxes]
         for k, v in bboxes.items():
             existing.field_bboxes.setdefault(k, v)
-        if existing.location is not None:
-            nb = _block_bbox(existing.field_bboxes)
+        # 全体枠は新規に取れたフィールドだけを取り込んで拡張する
+        if existing.location is not None and new_bbs:
+            nb = _bbox_union([existing.location.bbox, *new_bbs])
             if nb:
                 existing.location = LocationHint(page=existing.location.page, bbox=nb)

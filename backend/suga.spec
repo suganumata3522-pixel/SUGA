@@ -15,7 +15,11 @@ hidden = (
     + collect_submodules("app")
 )
 
-datas = [("app/static", "static")]
+datas = [
+    ("app/static", "static"),
+    # 日本語フォント (IPA ゴシック)。レポートPDFの日本語描画に必要。
+    ("app/assets", "app/assets"),
+]
 datas += collect_data_files("pdfminer")
 datas += collect_data_files("pymupdf", include_py_files=False)
 

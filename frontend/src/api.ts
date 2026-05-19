@@ -5,6 +5,8 @@ const BASE = import.meta.env.VITE_API_BASE ?? "";
 export type Locator = {
   page: number;
   bbox?: [number, number, number, number] | null;
+  // 差分位置（フィールド単位）。bbox は部材全体(橙枠)、diff_bbox は差分箇所(赤枠)。
+  diff_bbox?: [number, number, number, number] | null;
   search?: string | null;
   file_id?: string | null;
 };
@@ -48,8 +50,18 @@ export function highlightUrl(loc: Locator): string {
     params.set("x1", String(loc.bbox[2]));
     params.set("y1", String(loc.bbox[3]));
   }
+  if (loc.diff_bbox) {
+    params.set("dx0", String(loc.diff_bbox[0]));
+    params.set("dy0", String(loc.diff_bbox[1]));
+    params.set("dx1", String(loc.diff_bbox[2]));
+    params.set("dy1", String(loc.diff_bbox[3]));
+  }
   if (loc.search) params.set("search", loc.search);
   return `${BASE}/api/highlight/${loc.file_id}?${params.toString()}`;
+}
+
+export function reportUrl(): string {
+  return `${BASE}/api/report.pdf`;
 }
 
 export async function listUploads(): Promise<{ drawing: UploadInfo[]; calc: UploadInfo[] }> {

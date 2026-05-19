@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import io
 from pathlib import Path
 
-import fitz  # PyMuPDF
-from PIL import Image
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
@@ -14,6 +11,8 @@ from .checker import Diff, compare, compare_slabs
 from .config import STATIC_DIR
 from .models import MemberSet, SlabSet
 from .parsers import DrawingPdfParser, StructureSuitePdfParser, parse_calc_slabs, parse_drawing_slabs
+from .pdf_render import render_highlight_png
+from .report import build_report
 from .storage import clear_all, delete_upload, find_path, list_uploads, role_paths, save_upload
 
 app = FastAPI(title="SUGA - 構造図/計算書整合チェック", version="0.2.0")
@@ -143,6 +142,32 @@ def run_check() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# 全件PDFレポート
+# ---------------------------------------------------------------------------
+@app.get("/api/report.pdf")
+def report_pdf() -> Response:
+    """整合チェック結果（差分のみ）を1冊のPDFにまとめて返す。"""
+    if not role_paths("drawing") or not role_paths("calc"):
+        raise HTTPException(400, "構造図PDFと計算書PDFを両方アップロードしてください")
+    drawing_set, drawing_slabs = _parse_drawings()
+    calc_set, calc_slabs = _parse_calcs()
+    diffs = compare(drawing_set, calc_set)
+    slab_diffs = compare_slabs(drawing_slabs, calc_slabs)
+    summary = {
+        "構造図 小梁数": len(drawing_set.members),
+        "計算書 小梁数": len(calc_set.members),
+        "小梁 不整合件数": sum(1 for d in diffs if d.kind.value != "一致"),
+        "構造図 スラブ数": len(drawing_slabs.slabs),
+        "計算書 スラブ数": len(calc_slabs.slabs),
+        "スラブ 不整合件数": sum(1 for d in slab_diffs if d.kind.value != "一致"),
+    }
+    pdf = build_report(diffs, slab_diffs, summary)
+    filename = f"suga_report_{__import__('datetime').datetime.now():%Y%m%d_%H%M}.pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+# ---------------------------------------------------------------------------
 # PDFハイライト画像
 # ---------------------------------------------------------------------------
 @app.get("/api/highlight/{file_id}")
@@ -153,59 +178,27 @@ def highlight(
     y0: float | None = None,
     x1: float | None = None,
     y1: float | None = None,
+    dx0: float | None = None,
+    dy0: float | None = None,
+    dx1: float | None = None,
+    dy1: float | None = None,
     search: str | None = None,
     zoom: float = Query(2.0, ge=1.0, le=4.0),
     crop: bool = True,
 ) -> Response:
-    """指定ファイルの指定ページを画像化し、bbox or 検索ヒットを枠で強調して返す。
+    """ファイルのページをハイライト画像で返す。
 
-    bbox 指定があり crop=True のときは、該当箇所の周辺だけを切り出して返す
-    （構造図・計算書を並べて見たときに赤枠が小さすぎないようにするため）。
+    (x0,y0,x1,y1) = 部材全体（橙枠）、(dx0,dy0,dx1,dy1) = 差分箇所（赤枠）。
     """
     pdf_path = find_path(file_id)
     if pdf_path is None:
         raise HTTPException(404, "ファイルが見つかりません")
-    doc = fitz.open(pdf_path)
-    try:
-        if page > doc.page_count:
-            raise HTTPException(400, f"ページ {page} はPDFの範囲外です (max {doc.page_count})")
-        pg = doc.load_page(page - 1)
-
-        has_bbox = None not in (x0, y0, x1, y1)
-        rects: list[fitz.Rect] = []
-        if has_bbox:
-            rects.append(fitz.Rect(x0, y0, x1, y1))
-        elif search:
-            for r in pg.search_for(search):
-                rects.append(fitz.Rect(r.x0 - 10, r.y0 - 4, r.x1 + 80, r.y1 + 4))
-
-        derotate = pg.derotation_matrix
-        for r in rects:
-            pg.draw_rect(r * derotate, color=(1, 0.5, 0), width=2.5)
-
-        # 切り出し表示時は領域が小さいため解像度を上げる
-        render_zoom = max(zoom, 3.0) if (crop and has_bbox) else zoom
-        pix = pg.get_pixmap(matrix=fitz.Matrix(render_zoom, render_zoom), alpha=False)
-        png = pix.tobytes("png")
-
-        if crop and has_bbox:
-            im = Image.open(io.BytesIO(png))
-            bx0, bx1 = sorted((float(x0), float(x1)))
-            by0, by1 = sorted((float(y0), float(y1)))
-            m = 44  # 余白（ピクセル）
-            box = (
-                max(0, int(bx0 * render_zoom) - m),
-                max(0, int(by0 * render_zoom) - m),
-                min(im.width, int(bx1 * render_zoom) + m),
-                min(im.height, int(by1 * render_zoom) + m),
-            )
-            buf = io.BytesIO()
-            im.crop(box).save(buf, format="PNG")
-            png = buf.getvalue()
-
-        return Response(content=png, media_type="image/png")
-    finally:
-        doc.close()
+    bbox = (x0, y0, x1, y1) if None not in (x0, y0, x1, y1) else None
+    diff_bb = (dx0, dy0, dx1, dy1) if None not in (dx0, dy0, dx1, dy1) else None
+    png = render_highlight_png(pdf_path, page, bbox=bbox,
+                               diff_bboxes=[diff_bb] if diff_bb else None,
+                               search=search, zoom=zoom, crop=crop)
+    return Response(content=png, media_type="image/png")
 
 
 # ---------------------------------------------------------------------------
