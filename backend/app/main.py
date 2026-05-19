@@ -4,6 +4,7 @@ import io
 from pathlib import Path
 
 import fitz  # PyMuPDF
+from PIL import Image
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
@@ -154,8 +155,13 @@ def highlight(
     y1: float | None = None,
     search: str | None = None,
     zoom: float = Query(2.0, ge=1.0, le=4.0),
+    crop: bool = True,
 ) -> Response:
-    """指定ファイルの指定ページを画像化し、bbox or 検索ヒットを枠で強調して返す。"""
+    """指定ファイルの指定ページを画像化し、bbox or 検索ヒットを枠で強調して返す。
+
+    bbox 指定があり crop=True のときは、該当箇所の周辺だけを切り出して返す
+    （構造図・計算書を並べて見たときに赤枠が小さすぎないようにするため）。
+    """
     pdf_path = find_path(file_id)
     if pdf_path is None:
         raise HTTPException(404, "ファイルが見つかりません")
@@ -165,8 +171,9 @@ def highlight(
             raise HTTPException(400, f"ページ {page} はPDFの範囲外です (max {doc.page_count})")
         pg = doc.load_page(page - 1)
 
+        has_bbox = None not in (x0, y0, x1, y1)
         rects: list[fitz.Rect] = []
-        if x0 is not None and y0 is not None and x1 is not None and y1 is not None:
+        if has_bbox:
             rects.append(fitz.Rect(x0, y0, x1, y1))
         elif search:
             for r in pg.search_for(search):
@@ -176,9 +183,27 @@ def highlight(
         for r in rects:
             pg.draw_rect(r * derotate, color=(1, 0.5, 0), width=2.5)
 
-        pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
-        return Response(content=io.BytesIO(pix.tobytes("png")).getvalue(),
-                        media_type="image/png")
+        # 切り出し表示時は領域が小さいため解像度を上げる
+        render_zoom = max(zoom, 3.0) if (crop and has_bbox) else zoom
+        pix = pg.get_pixmap(matrix=fitz.Matrix(render_zoom, render_zoom), alpha=False)
+        png = pix.tobytes("png")
+
+        if crop and has_bbox:
+            im = Image.open(io.BytesIO(png))
+            bx0, bx1 = sorted((float(x0), float(x1)))
+            by0, by1 = sorted((float(y0), float(y1)))
+            m = 44  # 余白（ピクセル）
+            box = (
+                max(0, int(bx0 * render_zoom) - m),
+                max(0, int(by0 * render_zoom) - m),
+                min(im.width, int(bx1 * render_zoom) + m),
+                min(im.height, int(by1 * render_zoom) + m),
+            )
+            buf = io.BytesIO()
+            im.crop(box).save(buf, format="PNG")
+            png = buf.getvalue()
+
+        return Response(content=png, media_type="image/png")
     finally:
         doc.close()
 

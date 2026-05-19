@@ -28,7 +28,7 @@ const FOUNDATION_PREFIX = /^(?:FB|FCG|FG)/;
 const CANTILEVER_PREFIX = /^(?:CB|WCB)\d/;
 const WALLBEAM_PREFIX = /^(?:WB)\d/;
 
-type HighlightTarget = { role: "drawing" | "calc"; loc: Locator; mark: string };
+type CompareTarget = { mark: string; drawing?: Locator | null; calc?: Locator | null };
 
 export default function App() {
   const [uploads, setUploads] = useState<{ drawing: UploadInfo[]; calc: UploadInfo[] }>({ drawing: [], calc: [] });
@@ -40,7 +40,7 @@ export default function App() {
   const [hideWallBeam, setHideWallBeam] = useState(false);
   // 非表示にする種別。既定で「一致」を隠す（不整合のみ表示）。
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set(["一致"]));
-  const [highlight, setHighlight] = useState<HighlightTarget | null>(null);
+  const [highlight, setHighlight] = useState<CompareTarget | null>(null);
 
   const refresh = () => listUploads().then(setUploads).catch((e) => setError(String(e)));
   useEffect(() => { refresh(); }, []);
@@ -109,9 +109,9 @@ export default function App() {
     return result.slab_diffs.filter((d) => !hiddenKinds.has(d.kind));
   }, [result, hiddenKinds]);
 
-  const openHighlight = (role: "drawing" | "calc", loc: Locator | null | undefined, mark: string) => {
-    if (!loc || !loc.file_id) return;
-    setHighlight({ role, loc, mark });
+  const openCompare = (mark: string, drawing?: Locator | null, calc?: Locator | null) => {
+    if (!drawing?.file_id && !calc?.file_id) return;
+    setHighlight({ mark, drawing, calc });
   };
 
   const canCheck = uploads.drawing.length > 0 && uploads.calc.length > 0;
@@ -163,7 +163,7 @@ export default function App() {
           <p className="hint">
             「配筋不一致」「断面幅不一致」は要修正候補、「要目視確認」はPDF目視が必要なもの、
             「構造図のみ／計算書のみ」は片方にしか無い符号、「一致」は整合済みです。
-            各行の「図」「計算」ボタンで元PDFを表示します。
+            各行の「PDFで照合」ボタンで構造図と計算書の該当箇所を並べて表示します。
           </p>
           <p>
             構造図: <b>{result.drawing_member_count}</b> 部材 /
@@ -179,7 +179,7 @@ export default function App() {
               { label: "壁梁（WB）を除外", checked: hideWallBeam, onChange: setHideWallBeam },
             ]}
           />
-          <DiffTable diffs={beamDiffs} onHighlight={openHighlight} />
+          <DiffTable diffs={beamDiffs} onCompare={openCompare} />
         </div>
       )}
 
@@ -200,23 +200,40 @@ export default function App() {
           <FilterBar
             diffs={result.slab_diffs} allKinds={SLAB_KINDS}
             hiddenKinds={hiddenKinds} onToggleKind={toggleKind} />
-          <DiffTable diffs={slabDiffs} onHighlight={openHighlight} />
+          <DiffTable diffs={slabDiffs} onCompare={openCompare} />
         </div>
       )}
 
       {highlight && (
         <div className="modal-backdrop" onClick={() => setHighlight(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <b>{highlight.mark}</b> — {highlight.role === "drawing" ? "構造図" : "計算書"} p.{highlight.loc.page}
+              <span><b>{highlight.mark}</b>　<span className="muted">構造図と計算書を並べて照合</span></span>
               <button className="close" onClick={() => setHighlight(null)}>閉じる</button>
             </div>
-            <div className="modal-body">
-              <img src={highlightUrl(highlight.loc)} alt={highlight.mark} />
+            <div className="modal-body compare-body">
+              <ComparePane title="構造図" loc={highlight.drawing} />
+              <ComparePane title="計算書" loc={highlight.calc} />
             </div>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ComparePane({ title, loc }: { title: string; loc?: Locator | null }) {
+  return (
+    <div className="compare-pane">
+      <div className="compare-pane-head">
+        {title}
+        {loc?.file_id ? <span className="muted">　p.{loc.page}</span> : null}
+      </div>
+      <div className="compare-pane-img">
+        {loc?.file_id
+          ? <img src={highlightUrl(loc)} alt={title} />
+          : <div className="compare-empty">この符号に該当する記載がありません</div>}
+      </div>
     </div>
   );
 }
@@ -319,10 +336,10 @@ function DropZone({
 }
 
 function DiffTable({
-  diffs, onHighlight,
+  diffs, onCompare,
 }: {
   diffs: Diff[];
-  onHighlight: (role: "drawing" | "calc", loc: Locator | null | undefined, mark: string) => void;
+  onCompare: (mark: string, drawing?: Locator | null, calc?: Locator | null) => void;
 }) {
   if (diffs.length === 0) {
     return <p className="muted">表示できる項目がありません（フィルタを確認してください）</p>;
@@ -336,14 +353,11 @@ function DiffTable({
             <td className={`diff-kind ${KIND_COLORS[d.kind] ?? ""}`}>{d.kind}</td>
             <td>
               <b>{d.mark}</b>
-              {d.fields.length === 0 && (
+              {d.fields.length === 0 && (d.drawing_loc?.file_id || d.calc_loc?.file_id) && (
                 <div className="row" style={{ marginTop: 4 }}>
-                  {d.drawing_loc?.file_id && (
-                    <button className="link" onClick={() => onHighlight("drawing", d.drawing_loc, d.mark)}>図 p.{d.drawing_loc.page}</button>
-                  )}
-                  {d.calc_loc?.file_id && (
-                    <button className="link" onClick={() => onHighlight("calc", d.calc_loc, d.mark)}>計算 p.{d.calc_loc.page}</button>
-                  )}
+                  <button className="link" onClick={() => onCompare(d.mark, d.drawing_loc, d.calc_loc)}>
+                    PDFで照合
+                  </button>
                 </div>
               )}
             </td>
@@ -354,11 +368,10 @@ function DiffTable({
                 <div key={j} className="field-diff">
                   <code>{f.field}</code>: 図 <b>{f.drawing_value ?? "—"}</b> / 計算 <b>{f.calc_value ?? "—"}</b>
                   <span className="field-actions">
-                    {f.drawing_loc?.file_id && (
-                      <button className="link" onClick={() => onHighlight("drawing", f.drawing_loc, `${d.mark} / ${f.field}`)}>図</button>
-                    )}
-                    {f.calc_loc?.file_id && (
-                      <button className="link" onClick={() => onHighlight("calc", f.calc_loc, `${d.mark} / ${f.field}`)}>計算</button>
+                    {(f.drawing_loc?.file_id || f.calc_loc?.file_id) && (
+                      <button className="link" onClick={() => onCompare(d.mark, f.drawing_loc, f.calc_loc)}>
+                        PDFで照合
+                      </button>
                     )}
                   </span>
                 </div>

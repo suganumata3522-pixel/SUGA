@@ -227,3 +227,36 @@ button.link:hover { background: #eff6ff; }
 }
 .modal-body { overflow: auto; padding: 8px; }
 .modal-body img { display: block; max-width: 100%; }
+
+.modal-wide { width: 96vw; }
+.compare-body {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  padding: 10px;
+}
+.compare-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fafafa;
+}
+.compare-pane-head {
+  padding: 6px 10px;
+  font-weight: 700;
+  font-size: 13px;
+  background: #f3f4f6;
+  border-bottom: 1px solid #e5e7eb;
+  border-radius: 6px 6px 0 0;
+}
+.compare-pane-img { overflow: auto; padding: 6px; max-height: 80vh; }
+.compare-pane-img img { display: block; max-width: 100%; }
+.compare-empty {
+  color: #9ca3af;
+  padding: 48px 12px;
+  text-align: center;
+  font-size: 13px;
+}
