@@ -1,5 +1,5 @@
 [project]
-name = "suga-backend"
+name = "yhg-backend"
 version = "0.1.0"
 description = "構造図と計算書の整合性確認ツール（バックエンド）"
 requires-python = ">=3.11"

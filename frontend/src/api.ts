@@ -41,6 +41,22 @@ export type CheckResult = {
 
 export type UploadInfo = { id: string; name: string; role: "drawing" | "calc" };
 
+export type ProductInfo = {
+  kind: "core" | "sleeve";
+  name: string;
+  subtitle: string;
+  fastapi_title: string;
+  data_dirname: string;
+  port: number;
+  mode: "active" | "stub";
+};
+
+export async function getProductInfo(): Promise<ProductInfo> {
+  const r = await fetch(`${BASE}/api/product-info`);
+  if (!r.ok) throw new Error("製品情報の取得に失敗しました");
+  return r.json();
+}
+
 export function highlightUrl(loc: Locator): string {
   const params = new URLSearchParams();
   params.set("page", String(loc.page));

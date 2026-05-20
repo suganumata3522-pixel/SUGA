@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  CheckResult, Diff, Locator, UploadInfo,
-  clearUploads, deleteUpload, highlightUrl, listUploads, reportUrl, runCheck, uploadFiles,
+  CheckResult, Diff, Locator, ProductInfo, UploadInfo,
+  clearUploads, deleteUpload, getProductInfo, highlightUrl, listUploads, reportUrl, runCheck, uploadFiles,
 } from "./api";
 
 const KIND_COLORS: Record<string, string> = {
@@ -31,6 +31,7 @@ const WALLBEAM_PREFIX = /^(?:WB)\d/;
 type CompareTarget = { mark: string; drawing?: Locator | null; calc?: Locator | null };
 
 export default function App() {
+  const [product, setProduct] = useState<ProductInfo | null>(null);
   const [uploads, setUploads] = useState<{ drawing: UploadInfo[]; calc: UploadInfo[] }>({ drawing: [], calc: [] });
   const [result, setResult] = useState<CheckResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -46,7 +47,10 @@ export default function App() {
   const [reportFiltered, setReportFiltered] = useState(true);
 
   const refresh = () => listUploads().then(setUploads).catch((e) => setError(String(e)));
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    getProductInfo().then(setProduct).catch((e) => setError(String(e)));
+    refresh();
+  }, []);
 
   const toggleKind = (k: string) => {
     setHiddenKinds((prev) => {
@@ -140,7 +144,7 @@ export default function App() {
       const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
       const label = category === "beam" ? "小梁" : "スラブ";
       a.href = url;
-      a.download = `suga_report_${label}_${ts}.pdf`;
+      a.download = `yhg_report_${label}_${ts}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -154,13 +158,28 @@ export default function App() {
 
   const canCheck = uploads.drawing.length > 0 && uploads.calc.length > 0;
 
+  const isStub = product?.mode === "stub";
+
   return (
     <div className="container">
       <header className="app-header">
-        <div className="app-title">SUGA</div>
-        <div className="app-subtitle">構造図・計算書 整合チェックツール（RC小梁・スラブ）</div>
+        <div className="app-title">{product?.name ?? "YHG"}</div>
+        <div className="app-subtitle">{product?.subtitle ?? "構造図・計算書 整合チェックツール（RC小梁・スラブ）"}</div>
       </header>
 
+      {isStub ? (
+        <div className="card">
+          <h2>実装準備中</h2>
+          <p>
+            <b>{product?.name}</b> は現在開発準備中です。
+            梁スリーブ貫通補強の計算書サンプルPDFが揃い次第、パーサと整合チェックロジックを実装します。
+          </p>
+          <p className="hint">
+            このウィンドウを閉じて、構造図・計算書の整合チェックには <b>YHG.exe</b> をご利用ください。
+          </p>
+        </div>
+      ) : (
+      <>
       <div className="steps-guide">
         <div className="step"><span className="step-no">1</span>構造図・計算書PDFを入れる</div>
         <div className="step-arrow">→</div>
@@ -282,6 +301,8 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

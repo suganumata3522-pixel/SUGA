@@ -117,7 +117,7 @@ def _count_non_match(diffs: list[Diff]) -> int:
 def _add_cover(out: fitz.Document, diffs: list[Diff],
                category: str, summary: dict) -> None:
     page = out.new_page(width=P_W, height=P_H)
-    _T(page, (50, 60), f"SUGA  整合チェック結果まとめ — {category}", size=22)
+    _T(page, (50, 60), f"YHG  整合チェック結果まとめ — {category}", size=22)
     _T(page, (50, 92), f"作成日時: {datetime.now():%Y-%m-%d %H:%M}",
        size=11, color=(0.35, 0.35, 0.35))
 

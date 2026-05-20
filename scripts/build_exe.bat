@@ -1,12 +1,13 @@
 @echo off
 REM ===================================================================
-REM  SUGA.exe build script  (ASCII only to avoid encoding issues)
+REM  YHG / YHG-Sleeve  build script  (ASCII only to avoid encoding issues)
 REM  Requires: Python 3.11+ and Node.js 20+
+REM  Output:   backend\dist\YHG.exe  and  backend\dist\YHG-Sleeve.exe
 REM ===================================================================
 setlocal
 cd /d "%~dp0.."
 echo.
-echo ====== SUGA.exe build start ======
+echo ====== YHG / YHG-Sleeve build start ======
 echo.
 
 REM --- Find a working Python command (python or py) ---
@@ -28,7 +29,7 @@ node --version
 if errorlevel 1 goto err_node
 echo.
 
-echo [1/4] Building frontend ...
+echo [1/5] Building frontend ...
 cd frontend
 call npm install
 if errorlevel 1 goto err_npm_install
@@ -37,13 +38,13 @@ if errorlevel 1 goto err_npm_build
 cd ..
 echo.
 
-echo [2/4] Copying frontend to backend\app\static ...
+echo [2/5] Copying frontend to backend\app\static ...
 if exist backend\app\static rmdir /s /q backend\app\static
 xcopy /e /i /q frontend\dist backend\app\static
 if errorlevel 1 goto err_copy
 echo.
 
-echo [3/4] Installing Python deps and PyInstaller ...
+echo [3/5] Installing Python deps and PyInstaller ...
 cd backend
 %PYEXE% -m pip install -e .
 if errorlevel 1 goto err_pip
@@ -51,17 +52,25 @@ if errorlevel 1 goto err_pip
 if errorlevel 1 goto err_pyinstaller_install
 echo.
 
-echo [4/4] Building SUGA.exe with PyInstaller ...
-%PYEXE% -m PyInstaller suga.spec --noconfirm --clean
+echo [4/5] Building YHG.exe with PyInstaller ...
+%PYEXE% -m PyInstaller yhg.spec --noconfirm --clean
 if errorlevel 1 goto err_pyinstaller_build
+echo.
+
+echo [5/5] Building YHG-Sleeve.exe with PyInstaller ...
+%PYEXE% -m PyInstaller yhg_sleeve.spec --noconfirm --clean
+if errorlevel 1 goto err_pyinstaller_build_sleeve
 cd ..
 echo.
 
-if not exist backend\dist\SUGA.exe goto err_no_exe
+if not exist backend\dist\YHG.exe goto err_no_exe
+if not exist backend\dist\YHG-Sleeve.exe goto err_no_exe_sleeve
 
 echo ===================================================================
-echo  SUCCESS: backend\dist\SUGA.exe was created.
-echo  Close this window and double-click SUGA.exe to run.
+echo  SUCCESS:
+echo    backend\dist\YHG.exe          (structural drawing/calc check)
+echo    backend\dist\YHG-Sleeve.exe   (beam sleeve reinforcement check, stub)
+echo  Double-click either exe to run.
 echo ===================================================================
 pause
 exit /b 0
@@ -103,10 +112,17 @@ echo [ERROR] pip install pyinstaller failed.
 goto end_error
 :err_pyinstaller_build
 cd ..
-echo [ERROR] PyInstaller build failed.
+echo [ERROR] PyInstaller build of YHG.exe failed.
+goto end_error
+:err_pyinstaller_build_sleeve
+cd ..
+echo [ERROR] PyInstaller build of YHG-Sleeve.exe failed.
 goto end_error
 :err_no_exe
-echo [ERROR] Build finished but backend\dist\SUGA.exe was not found.
+echo [ERROR] Build finished but backend\dist\YHG.exe was not found.
+goto end_error
+:err_no_exe_sleeve
+echo [ERROR] Build finished but backend\dist\YHG-Sleeve.exe was not found.
 goto end_error
 
 :end_error

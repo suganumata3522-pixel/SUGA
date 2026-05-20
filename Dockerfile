@@ -1,4 +1,4 @@
-# SUGA 単一コンテナ用 Dockerfile（フロント同梱・1ポート）。
+# YHG 単一コンテナ用 Dockerfile（フロント同梱・1ポート）。
 # 社内サーバや常時起動PCで動かす場合に使用する。
 #   docker compose up -d  →  http://<ホストIP>:8000
 

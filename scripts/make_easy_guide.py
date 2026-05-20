@@ -1,8 +1,8 @@
-"""SUGA かんたん操作ガイド（初心者向け・図解）PDF を生成する。
+"""YHG かんたん操作ガイド（初心者向け・図解）PDF を生成する。
 
 PyMuPDF の組み込み日本語フォントで、画面モックアップ・矢印・
 「ここをクリック」吹き出し付きのビジュアルガイドを作る。
-出力: SUGA_かんたんガイド.pdf
+出力: YHG_かんたんガイド.pdf
 """
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def stepnum(p, x, y, n, r=11):
 
 
 def pagefooter(p, page_no, total):
-    t(p, M, H - 30, "SUGA かんたんガイド", size=8, color=GRAY)
+    t(p, M, H - 30, "YHG かんたんガイド", size=8, color=GRAY)
     t(p, W - M - 40, H - 30, f"{page_no} / {total}", size=8, color=GRAY)
 
 
@@ -108,7 +108,7 @@ def make() -> str:
     p = doc.new_page(width=W, height=H)
     p.draw_rect(fitz.Rect(0, 0, W, H), fill=(0.97, 0.98, 1.0), color=None)
     p.draw_rect(fitz.Rect(0, 0, W, 150), fill=BLUE, color=None)
-    tc(p, W / 2, 70, "SUGA", size=44, color=WHITE, bold=True)
+    tc(p, W / 2, 70, "YHG", size=44, color=WHITE, bold=True)
     tc(p, W / 2, 100, "かんたん操作ガイド", size=20, color=WHITE, bold=True)
     tc(p, W / 2, 128, "構造図と計算書の整合チェックツール", size=11, color=(0.85, 0.92, 1.0))
 
@@ -122,7 +122,7 @@ def make() -> str:
     tc(p, (b1.x0 + b1.x1) / 2, y + 28, "IT担当の人", size=12, color=GRAY, bold=True)
     tc(p, (b1.x0 + b1.x1) / 2, y + 44, "（最初の1回だけ）", size=8, color=GRAY)
     p.draw_line((b1.x0 + 16, y + 56), (b1.x1 - 16, y + 56), color=LGRAY, width=1)
-    for i, s in enumerate(["アプリ本体（SUGA.exe）", "を作って、みんなに配る", "", "→ ガイドの 6ページ目"]):
+    for i, s in enumerate(["アプリ本体（YHG.exe）", "を作って、みんなに配る", "", "→ ガイドの 6ページ目"]):
         tc(p, (b1.x0 + b1.x1) / 2, y + 78 + i * 16, s, size=9,
            color=GRAY if i < 3 else BLUE)
     # あなた
@@ -131,7 +131,7 @@ def make() -> str:
     tc(p, (b2.x0 + b2.x1) / 2, y + 28, "あなた（使う人）", size=12, color=BLUE, bold=True)
     tc(p, (b2.x0 + b2.x1) / 2, y + 44, "（毎回の作業）", size=8, color=BLUE)
     p.draw_line((b2.x0 + 16, y + 56), (b2.x1 - 16, y + 56), color=(0.75, 0.85, 1.0), width=1)
-    for i, s in enumerate(["SUGA.exe をダブルクリック", "PDFをドラッグ＆ドロップ", "ボタンを押す → 結果を見る", "", "→ ガイドの 2〜5ページ目"]):
+    for i, s in enumerate(["YHG.exe をダブルクリック", "PDFをドラッグ＆ドロップ", "ボタンを押す → 結果を見る", "", "→ ガイドの 2〜5ページ目"]):
         tc(p, (b2.x0 + b2.x1) / 2, y + 76 + i * 15, s, size=9,
            color=DARKBLUE if i < 4 else BLUE, bold=(i < 3))
 
@@ -141,9 +141,9 @@ def make() -> str:
     rect(p, note, fill=YELLOW, stroke=YELLOWB, width=1.2, radius=8)
     t(p, M + 16, y + 24, "★ 大事なこと", size=11, color=DARK, bold=True)
     for i, s in enumerate([
-        "「SUGA.exe を作る」作業（6ページ目）は、パソコンに詳しい人向けです。",
+        "「YHG.exe を作る」作業（6ページ目）は、パソコンに詳しい人向けです。",
         "むずかしいと感じたら、社内のIT担当の人に「1回だけ」おねがいしてください。",
-        "あなたが毎回やるのは「できあがった SUGA.exe を使う」（2〜5ページ目）だけです。",
+        "あなたが毎回やるのは「できあがった YHG.exe を使う」（2〜5ページ目）だけです。",
     ]):
         t(p, M + 16, y + 44 + i * 16, s, size=9, color=DARK)
 
@@ -151,7 +151,7 @@ def make() -> str:
     y = 540
     tc(p, W / 2, y, "毎回の作業の流れ（かんたん4ステップ）", size=12, color=BLUE, bold=True)
     y += 22
-    flow = ["SUGA.exe を\nダブルクリック", "PDFをここへ\nドラッグ", "整合チェック\n実行", "結果を見る\n（PDFで照合）"]
+    flow = ["YHG.exe を\nダブルクリック", "PDFをここへ\nドラッグ", "整合チェック\n実行", "結果を見る\n（PDFで照合）"]
     bw = (W - 2 * M - 3 * 24) / 4
     for i, s in enumerate(flow):
         bx = M + i * (bw + 24)
@@ -165,29 +165,29 @@ def make() -> str:
 
     pagefooter(p, 1, TOTAL)
 
-    # ============ ページ2: SUGA.exe を起動する ============
+    # ============ ページ2: YHG.exe を起動する ============
     p = doc.new_page(width=W, height=H)
-    header(p, "【使い方 1】 アプリを起動する", "SUGA.exe をダブルクリックするだけ")
+    header(p, "【使い方 1】 アプリを起動する", "YHG.exe をダブルクリックするだけ")
 
-    t(p, M, 86, "手順1  パソコンの中の「SUGA.exe」をさがします。", size=11, color=DARK, bold=True)
+    t(p, M, 86, "手順1  パソコンの中の「YHG.exe」をさがします。", size=11, color=DARK, bold=True)
     t(p, M, 104, "（IT担当の人からもらった場所。デスクトップや共有フォルダなど）", size=9, color=GRAY)
 
     # フォルダ画面モックアップ
     win = window(p, (M, 120, W - M, 290), "フォルダ")
     # ファイルアイコン3つ
-    files = [("メモ.txt", LGRAY), ("SUGA.exe", (0.8, 0.9, 1.0)), ("写真.png", LGRAY)]
+    files = [("メモ.txt", LGRAY), ("YHG.exe", (0.8, 0.9, 1.0)), ("写真.png", LGRAY)]
     fx = win.x0 + 60
     for i, (name, col) in enumerate(files):
         ix = fx + i * 150
         # アイコン
         rect(p, (ix, win.y0 + 36, ix + 46, win.y0 + 90), fill=col,
              stroke=(0.55, 0.6, 0.7), width=1, radius=4)
-        if name == "SUGA.exe":
-            tc(p, ix + 23, win.y0 + 68, "SUGA", size=9, color=BLUE, bold=True)
+        if name == "YHG.exe":
+            tc(p, ix + 23, win.y0 + 68, "YHG", size=9, color=BLUE, bold=True)
         tc(p, ix + 23, win.y0 + 104, name, size=8,
-           color=DARK if name == "SUGA.exe" else GRAY,
-           bold=(name == "SUGA.exe"))
-    # SUGA.exe を強調
+           color=DARK if name == "YHG.exe" else GRAY,
+           bold=(name == "YHG.exe"))
+    # YHG.exe を強調
     sx = fx + 150 + 23
     redring(p, sx, win.y0 + 63, 40, 46)
     cursor(p, sx + 6, win.y0 + 58)
@@ -204,7 +204,7 @@ def make() -> str:
          fill=(0.96, 0.96, 0.97), stroke=BORDER)
     t(p, win2.x0 + 20, win2.y0 + 23, "127.0.0.1:8000", size=8, color=GRAY)
     # アプリ画面（簡易）
-    t(p, win2.x0 + 20, win2.y0 + 56, "SUGA", size=14, color=BLUE)
+    t(p, win2.x0 + 20, win2.y0 + 56, "YHG", size=14, color=BLUE)
     t(p, win2.x0 + 92, win2.y0 + 56, "構造図・計算書 整合チェックツール", size=8, color=GRAY)
     rect(p, (win2.x0 + 20, win2.y0 + 70, win2.x1 - 20, win2.y0 + 92),
          fill=LIGHT, stroke=(0.75, 0.85, 1.0))
@@ -230,7 +230,7 @@ def make() -> str:
     t(p, M, 88, "手順1  PDFファイルを、画面の枠の中へドラッグして放します。", size=11, color=DARK, bold=True)
     t(p, M, 106, "（クリックしてファイルを選んでもOK。複数ファイルもまとめて入れられます）", size=9, color=GRAY)
 
-    win = window(p, (M, 122, W - M, 320), "ブラウザ - SUGA")
+    win = window(p, (M, 122, W - M, 320), "ブラウザ - YHG")
     rect(p, (win.x0 + 14, win.y0 + 12, win.x1 - 14, win.y1 - 12),
          fill=WHITE, stroke=BORDER)
     t(p, win.x0 + 26, win.y0 + 32, "PDFを入れる", size=10, color=BLUE, bold=True)
@@ -259,7 +259,7 @@ def make() -> str:
 
     t(p, M, 348, "手順2  入れ終わったら「整合チェック実行」ボタンを押します。", size=11, color=DARK, bold=True)
 
-    win2 = window(p, (M, 364, W - M, 500), "ブラウザ - SUGA")
+    win2 = window(p, (M, 364, W - M, 500), "ブラウザ - YHG")
     rect(p, (win2.x0 + 14, win2.y0 + 12, win2.x1 - 14, win2.y1 - 12),
          fill=WHITE, stroke=BORDER)
     # 入れたファイル一覧の例
@@ -295,7 +295,7 @@ def make() -> str:
     t(p, M, 88, "「整合チェック実行」を押すと、下のような結果が出ます。", size=11, color=DARK, bold=True)
     t(p, M, 106, "（解析に20〜30秒かかります。そのまま待ってください）", size=9, color=GRAY)
 
-    win = window(p, (M, 122, W - M, 360), "ブラウザ - SUGA")
+    win = window(p, (M, 122, W - M, 360), "ブラウザ - YHG")
     rect(p, (win.x0 + 14, win.y0 + 12, win.x1 - 14, win.y1 - 14),
          fill=WHITE, stroke=BORDER)
     t(p, win.x0 + 26, win.y0 + 32, "整合チェック結果 — 小梁", size=10, color=BLUE, bold=True)
@@ -363,7 +363,7 @@ def make() -> str:
     t(p, M, 90, "アプリを終了するには", size=12, color=BLUE, bold=True)
     win = window(p, (M, 106, W - M, 210), "コマンドプロンプト（黒い画面）")
     p.draw_rect(fitz.Rect(win.x0, win.y0, win.x1, win.y1), fill=(0.1, 0.1, 0.12), color=None)
-    t(p, win.x0 + 14, win.y0 + 24, "SUGA - 構造図/計算書 整合チェック", size=8, color=(0.7, 0.9, 0.7))
+    t(p, win.x0 + 14, win.y0 + 24, "YHG - 構造図/計算書 整合チェック", size=8, color=(0.7, 0.9, 0.7))
     t(p, win.x0 + 14, win.y0 + 40, "起動中... ブラウザを開きます", size=8, color=(0.7, 0.9, 0.7))
     # 閉じるボタン（×）強調
     cb = fitz.Rect(win.x1 - 20, win.y0 - 20, win.x1, win.y0)
@@ -378,7 +378,7 @@ def make() -> str:
         ("ブラウザが自動で開かない",
          "ブラウザを自分で開き、アドレス欄に  127.0.0.1:8000  と入力。"),
         ("「このサイトにアクセスできません」と出る",
-         "黒い画面（コンソール）が閉じていないか確認。閉じていたら SUGA.exe を再度ダブルクリック。"),
+         "黒い画面（コンソール）が閉じていないか確認。閉じていたら YHG.exe を再度ダブルクリック。"),
         ("整合チェックがなかなか終わらない",
          "20〜30秒は正常です。1分以上なら一度終了して、もう一度起動。"),
         ("結果がおかしい・差分が多すぎる",
@@ -399,7 +399,7 @@ def make() -> str:
     # ============ ページ6: exe を作る（IT担当向け） ============
     p = doc.new_page(width=W, height=H)
     p.draw_rect(fitz.Rect(0, 0, W, 56), fill=GRAY, color=None)
-    t(p, M, 32, "【参考】 アプリ本体（SUGA.exe）を作る", size=16, color=WHITE, bold=True)
+    t(p, M, 32, "【参考】 アプリ本体（YHG.exe）を作る", size=16, color=WHITE, bold=True)
     t(p, M + 6, 48, "この作業はパソコンに詳しい人（IT担当）向けです", size=9, color=(0.92, 0.92, 0.92))
 
     nb = fitz.Rect(M, 72, W - M, 116)
@@ -419,11 +419,11 @@ def make() -> str:
     y = 220
     t(p, M, y, "作る手順", size=11, color=DARK, bold=True)
     steps = [
-        "GitHub から SUGA 一式をダウンロード（ZIP）して解凍する",
+        "GitHub から YHG 一式をダウンロード（ZIP）して解凍する",
         "コマンドプロンプト（黒い画面）を開く（Windowsキー+R → cmd と入力）",
         "解凍したフォルダの中の  scripts\\build_exe.bat  を黒い画面にドラッグして Enter",
-        "5〜10分待つ。SUCCESS と出れば backend\\dist\\SUGA.exe が完成",
-        "できた SUGA.exe を共有フォルダに置いて、みんなに配る",
+        "5〜10分待つ。SUCCESS と出れば backend\\dist\\YHG.exe が完成",
+        "できた YHG.exe を共有フォルダに置いて、みんなに配る",
     ]
     yy = y + 18
     for i, s in enumerate(steps):
@@ -439,7 +439,7 @@ def make() -> str:
 
     pagefooter(p, 6, TOTAL)
 
-    out = "SUGA_かんたんガイド.pdf"
+    out = "YHG_かんたんガイド.pdf"
     doc.save(out)
     doc.close()
     return out

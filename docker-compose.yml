@@ -2,16 +2,16 @@
 #   docker compose up -d --build   で起動
 #   ブラウザで http://localhost:8000 （他PCからは http://<ホストIP>:8000）
 services:
-  suga:
+  yhg:
     build: .
-    container_name: suga
+    container_name: yhg
     ports:
       - "8000:8000"
     volumes:
-      - suga-data:/app/SUGA-data
+      - yhg-data:/app/YHG-data
     environment:
-      - SUGA_DATA_DIR=/app/SUGA-data
+      - YHG_DATA_DIR=/app/YHG-data
     restart: unless-stopped
 
 volumes:
-  suga-data:
+  yhg-data:

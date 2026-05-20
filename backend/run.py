@@ -1,14 +1,18 @@
-"""SUGA ローカル起動ランチャー。
+"""YHG ローカル起動ランチャー。
 
-各自の PC で `python run.py`（またはパッケージ化した SUGA.exe をダブルクリック）
+各自の PC で `python run.py`（またはパッケージ化した YHG.exe をダブルクリック）
 すると、ローカルで API サーバを起動し、既定ブラウザで画面を開く。
 """
 from __future__ import annotations
 
+import os
 import threading
 import webbrowser
 
-import uvicorn
+# import より前に製品種別を確定させる（config.py / main.py が起動時に参照）。
+os.environ.setdefault("YHG_PRODUCT", "core")
+
+import uvicorn  # noqa: E402
 
 HOST = "127.0.0.1"
 PORT = 8000
@@ -21,7 +25,7 @@ def _open_browser() -> None:
 
 def main() -> None:
     print("=" * 56)
-    print("  SUGA - 構造図/計算書 整合チェック")
+    print("  YHG - 構造図/計算書 整合チェック")
     print(f"  起動中... ブラウザで {URL} を開きます")
     print("  終了するにはこのウィンドウを閉じてください")
     print("=" * 56)

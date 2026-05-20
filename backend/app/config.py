@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+from .product import current as _current_product
+
 
 def _is_frozen() -> bool:
     """PyInstaller でパッケージ化された実行ファイルとして動いているか。"""
@@ -14,20 +16,20 @@ def _is_frozen() -> bool:
 
 
 def _app_dir() -> Path:
-    """ユーザーデータ（DB・アップロード）を置く基準ディレクトリ。
+    """ユーザーデータ（アップロード）を置く基準ディレクトリ。
 
-    - .exe 実行時: 実行ファイルと同じ場所に SUGA-data/ を作る
+    - .exe 実行時: 実行ファイルと同じ場所に <製品名>-data/ を作る
+      (YHG.exe → YHG-data/, YHG-Sleeve.exe → YHG-Sleeve-data/)
     - 通常実行時: カレントディレクトリ
     """
     if _is_frozen():
-        return Path(sys.executable).parent / "SUGA-data"
-    return Path(os.environ.get("SUGA_DATA_DIR", "."))
+        return Path(sys.executable).parent / _current_product()["data_dirname"]
+    return Path(os.environ.get("YHG_DATA_DIR", "."))
 
 
 def _bundle_dir() -> Path:
     """同梱リソース（フロントエンドのビルド成果物）の基準ディレクトリ。"""
     if _is_frozen():
-        # PyInstaller は同梱ファイルを sys._MEIPASS に展開する
         return Path(getattr(sys, "_MEIPASS", "."))
     return Path(__file__).resolve().parent
 
@@ -35,13 +37,11 @@ def _bundle_dir() -> Path:
 _DATA_DIR = _app_dir()
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-UPLOAD_DIR = Path(os.environ.get("SUGA_UPLOAD_DIR", str(_DATA_DIR / "uploads")))
+UPLOAD_DIR = Path(os.environ.get("YHG_UPLOAD_DIR", str(_DATA_DIR / "uploads")))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# フロントエンドのビルド成果物 (app/static/)。build スクリプトが配置する。
 STATIC_DIR = _bundle_dir() / "static"
 
-# 同梱アセット (assets/fonts/ipag.ttf など)。レポートPDFの日本語描画に使う。
 if _is_frozen():
     ASSETS_DIR = _bundle_dir() / "app" / "assets"
 else:

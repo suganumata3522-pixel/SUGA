@@ -12,10 +12,12 @@ from .config import STATIC_DIR
 from .models import MemberSet, SlabSet
 from .parsers import DrawingPdfParser, StructureSuitePdfParser, parse_calc_slabs, parse_drawing_slabs
 from .pdf_render import render_highlight_png
+from .product import current as current_product
 from .report import build_report
 from .storage import clear_all, delete_upload, find_path, list_uploads, role_paths, save_upload
 
-app = FastAPI(title="SUGA - 構造図/計算書整合チェック", version="0.2.0")
+_PRODUCT = current_product()
+app = FastAPI(title=_PRODUCT["fastapi_title"], version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,6 +30,12 @@ app.add_middleware(
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/product-info")
+def product_info() -> dict:
+    """フロントエンドが起動時に呼ぶ。製品種別(core/sleeve)に応じて画面を切り替える。"""
+    return dict(_PRODUCT)
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +125,8 @@ def _parse_calcs() -> tuple[MemberSet, SlabSet]:
 
 @app.post("/api/check")
 def run_check() -> dict:
+    if _PRODUCT["mode"] == "stub":
+        raise HTTPException(501, f"{_PRODUCT['name']} は実装準備中です（サンプル計算書PDFの提供待ち）")
     if not role_paths("drawing") or not role_paths("calc"):
         raise HTTPException(400, "構造図PDFと計算書PDFを両方アップロードしてください")
 
@@ -184,7 +194,7 @@ def report_pdf(
 
     pdf = build_report(diffs, label, summary)
     import datetime as _dt
-    fn = f"suga_report_{label}_{_dt.datetime.now():%Y%m%d_%H%M}.pdf"
+    fn = f"yhg_report_{label}_{_dt.datetime.now():%Y%m%d_%H%M}.pdf"
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 

@@ -18,7 +18,8 @@ dist/
 *.sqlite-journal
 backend/data/
 backend/uploads/
-SUGA-data/
+YHG-data/
+YHG-Sleeve-data/
 
 # Build artifacts
 backend/app/static/
