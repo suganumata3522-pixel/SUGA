@@ -60,8 +60,11 @@ export function highlightUrl(loc: Locator): string {
   return `${BASE}/api/highlight/${loc.file_id}?${params.toString()}`;
 }
 
-export function reportUrl(): string {
-  return `${BASE}/api/report.pdf`;
+export function reportUrl(category: "beam" | "slab", marks?: string[]): string {
+  const params = new URLSearchParams();
+  params.set("category", category);
+  if (marks) params.set("marks", marks.join(","));
+  return `${BASE}/api/report.pdf?${params.toString()}`;
 }
 
 export async function listUploads(): Promise<{ drawing: UploadInfo[]; calc: UploadInfo[] }> {

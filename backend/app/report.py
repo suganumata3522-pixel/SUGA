@@ -80,22 +80,25 @@ def _render_side(diff: Diff, side: str) -> bytes | None:
 
 
 def build_report(
-    beam_diffs: list[Diff],
-    slab_diffs: list[Diff],
+    diffs: list[Diff],
+    category: str,
     summary: dict,
 ) -> bytes:
-    """整合チェック結果を1冊のPDFにまとめる。"""
+    """整合チェック結果(1カテゴリ分)を1冊のPDFにまとめる。
+
+    category: "小梁" or "スラブ"
+    diffs:    そのカテゴリの差分リスト（呼び出し側でフィルタ済み）
+    summary:  表紙に載せる概要 (項目名 -> 値)
+    """
     out = fitz.open()
-    _add_cover(out, beam_diffs, slab_diffs, summary)
-    # 「一致」以外を出力。並びは UI と同じ（不整合→計算書のみ→構造図のみ等）。
-    for category, diffs in [("小梁", beam_diffs), ("スラブ", slab_diffs)]:
-        index = 0
-        total = _count_non_match(diffs)
-        for d in diffs:
-            if _kind_str(d) == "一致":
-                continue
-            index += 1
-            _add_diff_page(out, d, category, index, total)
+    _add_cover(out, diffs, category, summary)
+    index = 0
+    total = _count_non_match(diffs)
+    for d in diffs:
+        if _kind_str(d) == "一致":
+            continue
+        index += 1
+        _add_diff_page(out, d, category, index, total)
     pdf = out.tobytes()
     out.close()
     return pdf
@@ -111,10 +114,10 @@ def _count_non_match(diffs: list[Diff]) -> int:
     return sum(1 for d in diffs if _kind_str(d) != "一致")
 
 
-def _add_cover(out: fitz.Document, beam_diffs: list[Diff],
-               slab_diffs: list[Diff], summary: dict) -> None:
+def _add_cover(out: fitz.Document, diffs: list[Diff],
+               category: str, summary: dict) -> None:
     page = out.new_page(width=P_W, height=P_H)
-    _T(page, (50, 60), "SUGA  整合チェック結果まとめ", size=22)
+    _T(page, (50, 60), f"SUGA  整合チェック結果まとめ — {category}", size=22)
     _T(page, (50, 92), f"作成日時: {datetime.now():%Y-%m-%d %H:%M}",
        size=11, color=(0.35, 0.35, 0.35))
 
@@ -124,19 +127,21 @@ def _add_cover(out: fitz.Document, beam_diffs: list[Diff],
         _T(page, (70, y), f"・{k}: {v}", size=11); y += 20
 
     # 種別の内訳
-    y += 16
-    _T(page, (50, y), "■ 種別の内訳", size=14); y += 24
-    for category, diffs in [("小梁", beam_diffs), ("スラブ", slab_diffs)]:
-        counts: dict[str, int] = {}
-        for d in diffs:
-            k = _kind_str(d)
-            counts[k] = counts.get(k, 0) + 1
-        if not counts:
-            continue
-        _T(page, (70, y), f"【{category}】", size=11); y += 18
+    counts: dict[str, int] = {}
+    for d in diffs:
+        k = _kind_str(d)
+        counts[k] = counts.get(k, 0) + 1
+    if counts:
+        y += 16
+        _T(page, (50, y), "■ 種別の内訳", size=14); y += 24
         for k, v in counts.items():
-            _T(page, (90, y), f"・{k}: {v} 件", size=10); y += 16
-        y += 6
+            _T(page, (70, y), f"・{k}: {v} 件", size=11); y += 20
+
+    if _count_non_match(diffs) == 0:
+        y += 16
+        _T(page, (50, y),
+           "（対象の不整合はありません。フィルタ条件をご確認ください。）",
+           size=11, color=(0.4, 0.4, 0.4))
 
 
 def _add_diff_page(out: fitz.Document, diff: Diff, category: str,

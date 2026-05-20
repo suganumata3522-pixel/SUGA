@@ -142,29 +142,51 @@ def run_check() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 全件PDFレポート
+# 全件PDFレポート（小梁/スラブ別）
 # ---------------------------------------------------------------------------
 @app.get("/api/report.pdf")
-def report_pdf() -> Response:
-    """整合チェック結果（差分のみ）を1冊のPDFにまとめて返す。"""
+def report_pdf(
+    category: str = Query("beam", pattern="^(beam|slab)$"),
+    marks: str | None = None,
+) -> Response:
+    """指定カテゴリ(小梁/スラブ)の差分を1冊のPDFにまとめて返す。
+
+    marks="A,B,C" を渡すと、その符号のみに限定（表示中フィルタ反映用）。
+    marks 未指定なら、そのカテゴリの全差分（「一致」は除く）が対象。
+    """
     if not role_paths("drawing") or not role_paths("calc"):
         raise HTTPException(400, "構造図PDFと計算書PDFを両方アップロードしてください")
     drawing_set, drawing_slabs = _parse_drawings()
     calc_set, calc_slabs = _parse_calcs()
-    diffs = compare(drawing_set, calc_set)
-    slab_diffs = compare_slabs(drawing_slabs, calc_slabs)
-    summary = {
-        "構造図 小梁数": len(drawing_set.members),
-        "計算書 小梁数": len(calc_set.members),
-        "小梁 不整合件数": sum(1 for d in diffs if d.kind.value != "一致"),
-        "構造図 スラブ数": len(drawing_slabs.slabs),
-        "計算書 スラブ数": len(calc_slabs.slabs),
-        "スラブ 不整合件数": sum(1 for d in slab_diffs if d.kind.value != "一致"),
-    }
-    pdf = build_report(diffs, slab_diffs, summary)
-    filename = f"suga_report_{__import__('datetime').datetime.now():%Y%m%d_%H%M}.pdf"
+
+    if category == "beam":
+        diffs = compare(drawing_set, calc_set)
+        label = "小梁"
+        summary: dict = {
+            "構造図 小梁数": len(drawing_set.members),
+            "計算書 小梁数": len(calc_set.members),
+            "不整合 全件数": sum(1 for d in diffs if d.kind.value != "一致"),
+        }
+    else:
+        diffs = compare_slabs(drawing_slabs, calc_slabs)
+        label = "スラブ"
+        summary = {
+            "構造図 スラブ数": len(drawing_slabs.slabs),
+            "計算書 スラブ数": len(calc_slabs.slabs),
+            "不整合 全件数": sum(1 for d in diffs if d.kind.value != "一致"),
+        }
+
+    if marks is not None:
+        keep = {m.strip() for m in marks.split(",") if m.strip()}
+        diffs = [d for d in diffs if d.mark in keep]
+        summary["出力対象件数"] = len([d for d in diffs if d.kind.value != "一致"])
+        summary["出力条件"] = "表示中の符号のみ"
+
+    pdf = build_report(diffs, label, summary)
+    import datetime as _dt
+    fn = f"suga_report_{label}_{_dt.datetime.now():%Y%m%d_%H%M}.pdf"
     return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+                    headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 
 
 # ---------------------------------------------------------------------------

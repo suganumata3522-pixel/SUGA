@@ -66,8 +66,14 @@ h2 { font-size: 16px; margin: 4px 0 8px; display: flex; align-items: center; gap
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 .card-h2-row h2 { margin: 0; }
+.report-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 button.secondary {
   background: #0f172a;
   color: #fff;

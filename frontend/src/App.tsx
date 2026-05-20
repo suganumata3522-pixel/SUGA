@@ -41,7 +41,9 @@ export default function App() {
   // 非表示にする種別。既定で「一致」を隠す（不整合のみ表示）。
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set(["一致"]));
   const [highlight, setHighlight] = useState<CompareTarget | null>(null);
-  const [reporting, setReporting] = useState(false);
+  const [reporting, setReporting] = useState<"beam" | "slab" | null>(null);
+  // 出力範囲: ON のとき表示中の項目のみ出力する
+  const [reportFiltered, setReportFiltered] = useState(true);
 
   const refresh = () => listUploads().then(setUploads).catch((e) => setError(String(e)));
   useEffect(() => { refresh(); }, []);
@@ -115,11 +117,19 @@ export default function App() {
     setHighlight({ mark, drawing, calc });
   };
 
-  const handleReport = async () => {
-    setReporting(true);
+  const handleReport = async (category: "beam" | "slab") => {
+    setReporting(category);
     setError(null);
     try {
-      const r = await fetch(reportUrl());
+      // 「表示中の項目のみ出力」が ON のとき、フィルタ後の符号一覧を渡す。
+      let marks: string[] | undefined;
+      if (reportFiltered) {
+        const list = category === "beam" ? beamDiffs : slabDiffs;
+        marks = list
+          .filter((d) => d.kind !== "一致")
+          .map((d) => d.mark);
+      }
+      const r = await fetch(reportUrl(category, marks));
       if (!r.ok) {
         const msg = await r.text();
         throw new Error(msg || "レポート生成に失敗しました");
@@ -128,8 +138,9 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       const ts = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 12);
+      const label = category === "beam" ? "小梁" : "スラブ";
       a.href = url;
-      a.download = `suga_report_${ts}.pdf`;
+      a.download = `suga_report_${label}_${ts}.pdf`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -137,7 +148,7 @@ export default function App() {
     } catch (e) {
       setError(String(e));
     } finally {
-      setReporting(false);
+      setReporting(null);
     }
   };
 
@@ -188,15 +199,23 @@ export default function App() {
         <div className="card">
           <div className="card-h2-row">
             <h2><span className="badge">2</span>整合チェック結果 — 小梁</h2>
-            <button className="secondary" onClick={handleReport} disabled={reporting}>
-              {reporting ? "レポート生成中... (20〜40秒)" : "全件まとめてPDF出力"}
-            </button>
+            <div className="report-controls">
+              <label className="kind-check" title="OFF にすると種別フィルタ・部材除外を無視し、全差分を出力します">
+                <input type="checkbox" checked={reportFiltered}
+                       onChange={(e) => setReportFiltered(e.target.checked)} />
+                表示中の項目のみ出力
+              </label>
+              <button className="secondary" onClick={() => handleReport("beam")}
+                      disabled={reporting !== null}>
+                {reporting === "beam" ? "生成中... (10〜30秒)" : "小梁をPDF出力"}
+              </button>
+            </div>
           </div>
           <p className="hint">
             「配筋不一致」「断面幅不一致」は要修正候補、「要目視確認」はPDF目視が必要なもの、
             「構造図のみ／計算書のみ」は片方にしか無い符号、「一致」は整合済みです。
             各行の「PDFで照合」ボタンで構造図と計算書の該当箇所を並べて表示します。
-            <b>「全件まとめてPDF出力」</b>で全差分を1つのPDFにまとめてダウンロードできます。
+            右上の<b>「小梁をPDF出力」</b>で差分をまとめたPDFをダウンロードできます。
           </p>
           <p>
             構造図: <b>{result.drawing_member_count}</b> 部材 /
@@ -218,7 +237,20 @@ export default function App() {
 
       {result && (
         <div className="card">
-          <h2><span className="badge">3</span>整合チェック結果 — スラブ</h2>
+          <div className="card-h2-row">
+            <h2><span className="badge">3</span>整合チェック結果 — スラブ</h2>
+            <div className="report-controls">
+              <label className="kind-check" title="OFF にすると種別フィルタを無視し、全差分を出力します">
+                <input type="checkbox" checked={reportFiltered}
+                       onChange={(e) => setReportFiltered(e.target.checked)} />
+                表示中の項目のみ出力
+              </label>
+              <button className="secondary" onClick={() => handleReport("slab")}
+                      disabled={reporting !== null}>
+                {reporting === "slab" ? "生成中... (10〜30秒)" : "スラブをPDF出力"}
+              </button>
+            </div>
+          </div>
           {result.calc_slab_count === 0 && (
             <div className="notice">
               計算書側にスラブのデータが見つかりません。スラブの厚さ・配筋を照合するには、
