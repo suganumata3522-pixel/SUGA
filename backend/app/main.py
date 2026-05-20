@@ -194,9 +194,16 @@ def report_pdf(
 
     pdf = build_report(diffs, label, summary)
     import datetime as _dt
-    fn = f"yhg_report_{label}_{_dt.datetime.now():%Y%m%d_%H%M}.pdf"
-    return Response(content=pdf, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{fn}"'})
+    from urllib.parse import quote
+    ts = f"{_dt.datetime.now():%Y%m%d_%H%M}"
+    ascii_label = "beam" if category == "beam" else "slab"
+    ascii_fn = f"yhg_report_{ascii_label}_{ts}.pdf"
+    utf8_fn = quote(f"yhg_report_{label}_{ts}.pdf")
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f"attachment; filename=\"{ascii_fn}\"; filename*=UTF-8''{utf8_fn}"},
+    )
 
 
 # ---------------------------------------------------------------------------
