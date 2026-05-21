@@ -162,6 +162,7 @@ def report_pdf(
     """指定カテゴリ(小梁/スラブ)の差分を1冊のPDFにまとめて返す。
 
     marks="A,B,C" を渡すと、その符号のみに限定（表示中フィルタ反映用）。
+    その場合は「一致」も含めて出力する（画面で表示している通りの内容）。
     marks 未指定なら、そのカテゴリの全差分（「一致」は除く）が対象。
     """
     if not role_paths("drawing") or not role_paths("calc"):
@@ -186,13 +187,16 @@ def report_pdf(
             "不整合 全件数": sum(1 for d in diffs if d.kind.value != "一致"),
         }
 
+    include_match = False
     if marks is not None:
         keep = {m.strip() for m in marks.split(",") if m.strip()}
         diffs = [d for d in diffs if d.mark in keep]
-        summary["出力対象件数"] = len([d for d in diffs if d.kind.value != "一致"])
+        summary["出力対象件数"] = len(diffs)
         summary["出力条件"] = "表示中の符号のみ"
+        # 表示中に「一致」が含まれているなら、レポートでも一致を出す。
+        include_match = any(d.kind.value == "一致" for d in diffs)
 
-    pdf = build_report(diffs, label, summary)
+    pdf = build_report(diffs, label, summary, include_match=include_match)
     import datetime as _dt
     from urllib.parse import quote
     ts = f"{_dt.datetime.now():%Y%m%d_%H%M}"

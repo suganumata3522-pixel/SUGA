@@ -126,12 +126,11 @@ export default function App() {
     setError(null);
     try {
       // 「表示中の項目のみ出力」が ON のとき、フィルタ後の符号一覧を渡す。
+      // 「一致」を表示している場合は「一致」も含めて出力する。
       let marks: string[] | undefined;
       if (reportFiltered) {
         const list = category === "beam" ? beamDiffs : slabDiffs;
-        marks = list
-          .filter((d) => d.kind !== "一致")
-          .map((d) => d.mark);
+        marks = list.map((d) => d.mark);
       }
       const r = await fetch(reportUrl(category, marks));
       if (!r.ok) {

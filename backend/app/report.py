@@ -83,21 +83,21 @@ def build_report(
     diffs: list[Diff],
     category: str,
     summary: dict,
+    *,
+    include_match: bool = False,
 ) -> bytes:
     """整合チェック結果(1カテゴリ分)を1冊のPDFにまとめる。
 
     category: "小梁" or "スラブ"
     diffs:    そのカテゴリの差分リスト（呼び出し側でフィルタ済み）
     summary:  表紙に載せる概要 (項目名 -> 値)
+    include_match: True なら「一致」もページとして出力する（画面表示準拠）。
     """
     out = fitz.open()
     _add_cover(out, diffs, category, summary)
-    index = 0
-    total = _count_non_match(diffs)
-    for d in diffs:
-        if _kind_str(d) == "一致":
-            continue
-        index += 1
+    targets = [d for d in diffs if include_match or _kind_str(d) != "一致"]
+    total = len(targets)
+    for index, d in enumerate(targets, start=1):
         _add_diff_page(out, d, category, index, total)
     pdf = out.tobytes()
     out.close()
