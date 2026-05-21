@@ -298,7 +298,15 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
                 cell_hi = (mark_hi_x + others_right[0]) / 2
             else:
                 cell_hi = mark_hi_x + 135
-            x_lo = min(label_x_lo, mark_lo) - 3
+            # 左端：同じ符号行で左隣の mark があれば中点で区切る。無ければラベル列まで広げ、
+            # 行頭の項目名（位置/断面/主筋/...）も枠内に入れる。
+            # （これを入れないと "B3A-B3" のような同一行 2 mark のとき、後の mark の枠が
+            #  ラベル列まで広がり前の mark の値を巻き込む。）
+            others_left = [x for x in all_mark_xs if x < mark_lo]
+            if others_left:
+                x_lo = (others_left[-1] + mark_lo) / 2 - 3
+            else:
+                x_lo = min(label_x_lo, mark_lo) - 3
             x_hi = cell_hi + 4
 
             field_bboxes: dict[str, tuple[float, float, float, float]] = {}

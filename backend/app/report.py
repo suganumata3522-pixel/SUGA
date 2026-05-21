@@ -41,8 +41,8 @@ def _Tbox(page: fitz.Page, rect: fitz.Rect, text: str,
                         **_font_kwargs())
 
 
-def _render_side(diff: Diff, side: str) -> bytes | None:
-    """差分の片側(構造図 or 計算書)のハイライト画像を返す。
+def _render_side(diff: Diff, side: str) -> tuple[bytes | None, int | None]:
+    """差分の片側(構造図 or 計算書)のハイライト画像と元PDFページ番号を返す。
 
     フィールド差分がある場合は全フィールドの赤枠を1枚にまとめる。
     """
@@ -54,7 +54,7 @@ def _render_side(diff: Diff, side: str) -> bytes | None:
     if field_locs:
         primary = next((l for l in field_locs if l.bbox), None)
         if primary is None:
-            return None
+            return (None, None)
         page_no = primary.page
         file_id = primary.file_id
         bbox = primary.bbox
@@ -62,21 +62,23 @@ def _render_side(diff: Diff, side: str) -> bytes | None:
     else:
         m = diff.drawing_loc if side == "drawing" else diff.calc_loc
         if not m or not m.file_id or not m.bbox:
-            return None
+            page = m.page if m else None
+            return (None, page)
         page_no = m.page
         file_id = m.file_id
         bbox = m.bbox
         diff_bbs = []
     if not file_id:
-        return None
+        return (None, page_no)
     path = find_path(file_id)
     if path is None:
-        return None
+        return (None, page_no)
     try:
-        return render_highlight_png(path, page_no, bbox=bbox,
-                                    diff_bboxes=diff_bbs or None)
+        png = render_highlight_png(path, page_no, bbox=bbox,
+                                   diff_bboxes=diff_bbs or None)
+        return (png, page_no)
     except Exception:
-        return None
+        return (None, page_no)
 
 
 def build_report(
@@ -175,10 +177,11 @@ def _add_diff_page(out: fitz.Document, diff: Diff, category: str,
         ("構造図", _render_side(diff, "drawing")),
         ("計算書", _render_side(diff, "calc")),
     ]
-    for i, (label, png) in enumerate(panels):
+    for i, (label, (png, page_no)) in enumerate(panels):
         x0 = 28 + i * (pane_w + gap)
-        # ラベル
-        _T(page, (x0 + 4, img_top + 11), label, size=10, color=(0.3, 0.3, 0.3))
+        # ラベル（元PDFのページ番号付き）
+        full_label = f"{label}　p.{page_no}" if page_no else label
+        _T(page, (x0 + 4, img_top + 11), full_label, size=10, color=(0.3, 0.3, 0.3))
         # 画像枠
         img_rect = fitz.Rect(x0, img_top + 16, x0 + pane_w, img_top + 16 + pane_h)
         page.draw_rect(img_rect, color=(0.82, 0.82, 0.82), width=0.5)
