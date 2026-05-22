@@ -34,6 +34,10 @@ _CIRCLED_NUM = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑�
 _RE_CIRCLED_HEADER = re.compile(
     rf"^[{_CIRCLED_NUM}]\s*([A-Za-z][^\s（(]*?)\s*(?:[（(]([^）)]*)[）)])?\s*$"
 )
+# さらに別書式: "1_WB1" "4_B1連梁" "6-2_FB3-FCB1" のように
+# "番号_符号"（丸数字でも No. でもない）で始まる計算書もある。
+# 末尾に "_備考" が付くことがあるので符号部だけを取り出す。
+_RE_NUM_HEADER = re.compile(r"^\s*\d+(?:-\d+)?_([A-Za-z][^\s_（(]*)(?:_.*)?$")
 _RE_MATERIAL = re.compile(
     r"コンクリート\s*(Fc\d+).+?主筋\s*(SD\d+).+?ST\.?\s*(SD\d+)"
 )
@@ -93,16 +97,20 @@ class StructureSuitePdfParser(Parser):
             i = 0
             while i < len(lines):
                 line = lines[i]
-                # ブロック開始（"No.1_B1(…)" 形式 か "①WB1" 形式）
+                # ブロック開始（"No.1_B1(…)" / "①WB1" / "1_WB1" 形式）
                 m = _RE_BLOCK_HEADER.match(line)
                 cm = _RE_CIRCLED_HEADER.match(line) if m is None else None
-                if m or cm:
+                nm = _RE_NUM_HEADER.match(line) if (m is None and cm is None) else None
+                if m or cm or nm:
                     if m:
                         marks_field = m.group(1)  # 例 "B1・B1A"
                         note = m.group(2)
-                    else:
+                    elif cm:
                         marks_field = cm.group(1)  # 例 "WB1" / "B1連梁-B1A"
                         note = cm.group(2) or ""
+                    else:
+                        marks_field = nm.group(1)  # 例 "WB1" / "FB3-FCB1"
+                        note = ""
                     block_marks = [s for s in re.split(r"[・,、]", marks_field) if s]
                     current_block = {
                         "marks": block_marks,
