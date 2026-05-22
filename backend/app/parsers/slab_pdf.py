@@ -184,6 +184,9 @@ _RE_SLAB_HEADER = re.compile(r"No\.\d+(?:-\d+)?[_ ]\s*([A-Z]+\d+[A-Z]?)\s*[（(]
 # 別書式の見出し: "1_S1_EV屋根" "2-1_CS1_階段屋根" のように
 # "番号_符号_備考"（No. 無し・カッコ無し）の計算書もある。
 _RE_SLAB_HEADER2 = re.compile(r"^\s*\d+(?:-\d+)?_([A-Z]+\d+[A-Z]?)_(.+?)\s*$")
+# さらに別書式: "<1>S18 B1SL ﾄﾗﾝｸﾙｰﾑ" "<5>S20B(配力筋) B1SL 駐車場" のように
+# "<番号>符号 場所" で始まる計算書もある（符号直後にカッコ書きが付くことも）。
+_RE_SLAB_HEADER3 = re.compile(r"^\s*<\d+>\s*([A-Z]+\d+[A-Z]?)(?:[（(][^）)]*[）)])?\s+(.*)$")
 _RE_T = re.compile(r"\bt\s*=\s*(\d+)\s*mm")
 _RE_FC = re.compile(r"Fc(\d+)")
 _RE_SUPPORT = re.compile(r"支持条件：([^,、]+)")
@@ -237,7 +240,8 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
         cur: dict | None = None
         for lw in _group_lines(pd.words):
             line = " ".join(w["text"] for w in lw)
-            hm = _RE_SLAB_HEADER.search(line) or _RE_SLAB_HEADER2.match(line)
+            hm = (_RE_SLAB_HEADER.search(line) or _RE_SLAB_HEADER2.match(line)
+                  or _RE_SLAB_HEADER3.match(line))
             if hm:
                 # 計算書には小梁ブロック(No.X_B1 等)も含まれる。スラブ符号
                 # (S?? / CS??) 以外は小梁としてここでは扱わない。

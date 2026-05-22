@@ -38,6 +38,9 @@ _RE_CIRCLED_HEADER = re.compile(
 # "番号_符号"（丸数字でも No. でもない）で始まる計算書もある。
 # 末尾に "_備考" が付くことがあるので符号部だけを取り出す。
 _RE_NUM_HEADER = re.compile(r"^\s*\d+(?:-\d+)?_([A-Za-z][^\s_（(]*)(?:_.*)?$")
+# さらに別書式: "<1>B1 2-5SL 居室" "<5>B4,B4A,B4B,B4C B1SL 駐車場" のように
+# "<番号>符号[,符号...] 場所" で始まる計算書もある。
+_RE_ANGLE_HEADER = re.compile(r"^<\d+>\s*(\S+)\s*(.*)$")
 _RE_MATERIAL = re.compile(
     r"コンクリート\s*(Fc\d+).+?主筋\s*(SD\d+).+?ST\.?\s*(SD\d+)"
 )
@@ -97,20 +100,24 @@ class StructureSuitePdfParser(Parser):
             i = 0
             while i < len(lines):
                 line = lines[i]
-                # ブロック開始（"No.1_B1(…)" / "①WB1" / "1_WB1" 形式）
+                # ブロック開始（"No.1_B1(…)" / "①WB1" / "1_WB1" / "<1>B1 …" 形式）
                 m = _RE_BLOCK_HEADER.match(line)
                 cm = _RE_CIRCLED_HEADER.match(line) if m is None else None
                 nm = _RE_NUM_HEADER.match(line) if (m is None and cm is None) else None
-                if m or cm or nm:
+                am = _RE_ANGLE_HEADER.match(line) if (m is None and cm is None and nm is None) else None
+                if m or cm or nm or am:
                     if m:
                         marks_field = m.group(1)  # 例 "B1・B1A"
                         note = m.group(2)
                     elif cm:
                         marks_field = cm.group(1)  # 例 "WB1" / "B1連梁-B1A"
                         note = cm.group(2) or ""
-                    else:
+                    elif nm:
                         marks_field = nm.group(1)  # 例 "WB1" / "FB3-FCB1"
                         note = ""
+                    else:
+                        marks_field = am.group(1)  # 例 "B1" / "B4,B4A,B4B,B4C"
+                        note = am.group(2) or ""
                     block_marks = [s for s in re.split(r"[・,、]", marks_field) if s]
                     current_block = {
                         "marks": block_marks,
