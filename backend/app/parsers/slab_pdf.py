@@ -118,10 +118,12 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
 
         # スラブ厚（厚さ列・符号行）
         thick_raw = None
+        thick_word: dict | None = None
         for w in words:
             if thick_lo <= float(w["x0"]) <= thick_hi and abs(float(w["top"]) - my) <= 4:
                 if re.match(r"^[\d〜～\-]+$", w["text"]):
                     thick_raw = w["text"]
+                    thick_word = w
                     break
         thickness, thick_disp = (_parse_thickness(thick_raw) if thick_raw else (None, None))
 
@@ -137,12 +139,18 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
         top_rebar = _rebar_at(top_y)
         bot_rebar = _rebar_at(bot_y)
 
-        # フィールド単位の枠（差分の赤枠）は対象行のみをタイトに囲う。
+        # フィールド単位の枠（差分の赤枠）は対象箇所のみをタイトに囲う。
         # 部材全体枠（橙）は location.bbox 側で符号〜配筋を覆う。
+        # スラブ厚は厚さの数値だけを囲い、行全体を覆わない。
         sym_top, sym_bot = my, float(mw["bottom"])
-        field_bboxes: dict[str, tuple[float, float, float, float]] = {
-            "thickness": (box_left, sym_top - 3, box_right, sym_bot + 3),
-        }
+        field_bboxes: dict[str, tuple[float, float, float, float]] = {}
+        if thick_word is not None:
+            field_bboxes["thickness"] = (
+                float(thick_word["x0"]) - 3, float(thick_word["top"]) - 3,
+                float(thick_word["x1"]) + 3, float(thick_word["bottom"]) + 3,
+            )
+        else:
+            field_bboxes["thickness"] = (thick_lo, sym_top - 3, thick_hi, sym_bot + 3)
         if top_y is not None:
             field_bboxes["top"] = (box_left, top_y - 3, box_right, top_y + 7)
         if bot_y is not None:
