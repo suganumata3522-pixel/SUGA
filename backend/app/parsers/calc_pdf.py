@@ -24,7 +24,10 @@ from .pdf_cache import get_pages
 
 __all__ = ["StructureSuitePdfParser", "SSCalcPdfParser"]
 
-_RE_BLOCK_HEADER = re.compile(r"No\.\d+_([^\s（(]+)\s*[（(]([^）)]*)[）)]")
+# ブロック見出し: "No.1_B1（…）" のほか "No.5 B5 (…)" のように
+# アンダースコアの代わりに半角スペースで区切る計算書もある。
+# 番号は "No.4" のほか "No.21-1"（枝番）もある。
+_RE_BLOCK_HEADER = re.compile(r"No\.\d+(?:-\d+)?[_ ]\s*([^\s（(]+)\s*[（(]([^）)]*)[）)]")
 _RE_MATERIAL = re.compile(
     r"コンクリート\s*(Fc\d+).+?主筋\s*(SD\d+).+?ST\.?\s*(SD\d+)"
 )
@@ -128,12 +131,19 @@ class StructureSuitePdfParser(Parser):
                         continue
                     position_labels = _split_positions(_RE_POS_LINE.match(pos_line).group(1))
 
-                    # 主筋上下と ST. を後続から探す（数行先まで）
+                    # 主筋上下と ST. を後続から探す（数行先まで）。
+                    # 断面行（"断面 mm B x D = ..."）は符号行の後に来るため、
+                    # ここで列ごとの (B, D) も併せて拾う。
                     top_tokens: list[str] = []
                     bottom_tokens: list[str] = []
                     st_tokens: list[str] = []
+                    section_tokens: list[tuple[int, int]] = []
                     for j in range(i + 2, min(i + 25, len(lines))):
                         ln = lines[j]
+                        if not section_tokens:
+                            secs = _RE_SECTION.findall(ln)
+                            if secs:
+                                section_tokens = [(int(b), int(d)) for b, d in secs]
                         mt = _RE_TOP_LINE.match(ln)
                         mb = _RE_BOT_LINE.match(ln)
                         ms = _RE_ST_LINE.match(ln)
@@ -143,7 +153,7 @@ class StructureSuitePdfParser(Parser):
                             bottom_tokens = _tokens_top_bottom(mb.group(1))
                         elif ms and not st_tokens:
                             st_tokens = _tokens_st(ms.group(1))
-                        if top_tokens and bottom_tokens and st_tokens:
+                        if top_tokens and bottom_tokens and st_tokens and section_tokens:
                             break
 
                     # marks_per_col は通常 2つ（左セット/右セット）。
@@ -173,7 +183,13 @@ class StructureSuitePdfParser(Parser):
                         # 既存メンバーにマージ or 新規追加
                         existing = next((m for m in members if m.mark == mark), None)
                         B = D = None
-                        if current_block["sections"]:
+                        # 断面は (1) 断面計算表の列ごとの B x D（符号行の後にある）、
+                        # (2) ブロック上部で拾った sections、の順に引き当てる。
+                        if col_idx < len(section_tokens):
+                            B, D = section_tokens[col_idx]
+                        elif section_tokens:
+                            B, D = section_tokens[-1]
+                        elif current_block["sections"]:
                             # mark がブロック内の何番目かでセクションを引き当てる
                             bi = current_block["marks"].index(mark) if mark in current_block["marks"] else 0
                             if bi < len(current_block["sections"]):

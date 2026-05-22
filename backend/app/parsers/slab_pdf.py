@@ -170,7 +170,9 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
 # ---------------------------------------------------------------------------
 # 計算書スラブ
 # ---------------------------------------------------------------------------
-_RE_SLAB_HEADER = re.compile(r"No\.\d+_([A-Z]+\d+[A-Z]?)\s*[（(]([^）)]*)[）)]")
+# ブロック見出し。番号は "No.20" のほか "No.21-1"（枝番）もあり、
+# 区切りはアンダースコアのほか半角スペースのこともある。
+_RE_SLAB_HEADER = re.compile(r"No\.\d+(?:-\d+)?[_ ]\s*([A-Z]+\d+[A-Z]?)\s*[（(]([^）)]*)[）)]")
 _RE_T = re.compile(r"\bt\s*=\s*(\d+)\s*mm")
 _RE_FC = re.compile(r"Fc(\d+)")
 _RE_SUPPORT = re.compile(r"支持条件：([^,、]+)")

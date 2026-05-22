@@ -42,9 +42,9 @@ def render_highlight_png(
                 rects.append(fitz.Rect(r.x0 - 10, r.y0 - 4, r.x1 + 80, r.y1 + 4))
         derotate = pg.derotation_matrix
         for r in rects:
-            pg.draw_rect(r * derotate, color=(1, 0.5, 0), width=1.0)
+            pg.draw_rect(r * derotate, color=(1, 0.5, 0), width=0.7)
         for db in diff_bboxes or ():
-            pg.draw_rect(fitz.Rect(*db) * derotate, color=(0.85, 0.1, 0.1), width=1.5)
+            pg.draw_rect(fitz.Rect(*db) * derotate, color=(0.85, 0.1, 0.1), width=0.8)
 
         render_zoom = max(zoom, 3.0) if (crop and bbox is not None) else zoom
         pix = pg.get_pixmap(matrix=fitz.Matrix(render_zoom, render_zoom), alpha=False)
