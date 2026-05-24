@@ -279,7 +279,7 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
         if not row_words or row_words[0]["text"] != "符号":
             continue
         # マーク列を取得
-        mark_words = [w for w in row_words[1:] if re.match(r"^(?:B|CB|CG|WB|WCB|FB|FCG|FG)\d+[A-Z]?$", w["text"])]
+        mark_words = [w for w in row_words[1:] if re.match(r"^(?:WCB|FCG|FCB|CGX|CGY|CG|CB|WB|FB|FG|B)\d+[A-Z]?$", w["text"])]
         if not mark_words:
             continue
         # 同一 mark が 2 個並ぶケース（"B1A B1A"）も含む。

@@ -23,6 +23,23 @@ _SLAB_REBAR_RE = re.compile(r"(?:D\d+)+@\d+")
 _THICK_RANGE_RE = re.compile(r"(\d+)")
 
 
+# 符号名から推定する厚み: S18→180, CS25A→250, CS315→315 など
+_MARK_THICK_RE = re.compile(r"^C?S(\d{2,3})[A-Z]?$")
+
+
+def _thickness_from_mark(mark: str) -> int | None:
+    """符号名から厚みを推定する。"S18"→180, "CS25A"→250, "CS315"→315。
+
+    日本のRC構造図で広く使われる慣例: 符号 S/CS の後の数値が
+    2桁なら ×10、3桁ならそのまま mm として扱う。
+    """
+    m = _MARK_THICK_RE.match(mark)
+    if not m:
+        return None
+    n = int(m.group(1))
+    return n * 10 if n < 100 else n
+
+
 def _parse_thickness(raw: str) -> tuple[int | None, str]:
     """スラブ厚表記をパース。"180" -> (180,"180"), "260〜260" -> (260,...), "210〜180" -> (210,...)。
     代表値は最大値（critical section 寄り）を採る。
@@ -126,6 +143,14 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
                     thick_word = w
                     break
         thickness, thick_disp = (_parse_thickness(thick_raw) if thick_raw else (None, None))
+        # 厚み列のフォント/文字コードが不安定で "02〜000" "01〜800" のような
+        # 化け値になり、現実離れした厚み (80mm未満 / 500mm超) になることがある。
+        # その場合は符号名 (S18→180, CS25→250) から推定して置き換える。
+        if thickness is None or not (80 <= thickness <= 500):
+            est = _thickness_from_mark(mw["text"])
+            if est is not None:
+                thickness = est
+                thick_disp = str(est) if not thick_raw else f"{thick_raw}→{est}(符号推定)"
 
         def _rebar_at(y: float | None) -> list[str]:
             if y is None:

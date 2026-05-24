@@ -20,7 +20,7 @@ from ..models import BeamMember, LocationHint, MemberSet, PositionRebar, Section
 from .base import Parser
 from .pdf_cache import get_pages
 
-_MARK_RE = re.compile(r"^(?:B|CB|CG|WB|WCB|FB|FCG|FG)\d+[A-Z]?$")
+_MARK_RE = re.compile(r"^(?:WCB|FCG|FCB|CGX|CGY|CG|CB|WB|FB|FG|B)\d+[A-Z]?$")
 # 主筋径は D10/D13/D16/D19/D22/D25/D29/D32/D35/D38/D41 を許容
 _BAR_SIZE = r"(?:10|13|16|19|22|25|29|32|35|38|41)"
 _REBAR_RE = re.compile(rf"\d+(?:/\d+)?-D{_BAR_SIZE}(?:@\d+)?")
