@@ -203,18 +203,39 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
 # ---------------------------------------------------------------------------
 # 計算書スラブ
 # ---------------------------------------------------------------------------
-# ブロック見出し。番号は "No.20" のほか "No.21-1"（枝番）もあり、
-# 区切りはアンダースコアのほか半角スペースのこともある。
+# 担当者によってブロック見出しの書き方が異なるため、見出し書式に依存せず、
+# "lx = ..., t = NNNmm" の行（スラブ計算ブロックに必ず現れる）をアンカーに
+# して抽出する。符号(mark)は直前の非空行から S/CS パターンで取り出す。
+
+# 既知の見出しパターンから note を抽出するための補助（参考用）。
+# パターンに合致しなくても抽出は通る。
 _RE_SLAB_HEADER = re.compile(r"No\.\d+(?:-\d+)?[_ ]\s*([A-Z]+\d+[A-Z]?)\s*[（(]([^）)]*)[）)]")
-# 別書式の見出し: "1_S1_EV屋根" "2-1_CS1_階段屋根" のように
-# "番号_符号_備考"（No. 無し・カッコ無し）の計算書もある。
 _RE_SLAB_HEADER2 = re.compile(r"^\s*\d+(?:-\d+)?_([A-Z]+\d+[A-Z]?)_(.+?)\s*$")
-# さらに別書式: "<1>S18 B1SL ﾄﾗﾝｸﾙｰﾑ" "<5>S20B(配力筋) B1SL 駐車場" のように
-# "<番号>符号 場所" で始まる計算書もある（符号直後にカッコ書きが付くことも）。
 _RE_SLAB_HEADER3 = re.compile(r"^\s*<\d+>\s*([A-Z]+\d+[A-Z]?)(?:[（(][^）)]*[）)])?\s+(.*)$")
 _RE_T = re.compile(r"\bt\s*=\s*(\d+)\s*mm")
 _RE_FC = re.compile(r"Fc(\d+)")
 _RE_SUPPORT = re.compile(r"支持条件：([^,、]+)")
+# スラブ計算ブロックのアンカー: "lx = X.XXm" を含む行、または独立で "t = NNNmm" を含む行。
+_RE_SLAB_ANCHOR = re.compile(r"\blx\s*=|\bt\s*=\s*\d+\s*mm")
+
+
+def _extract_mark_and_note_from_header(line: str) -> tuple[str | None, str | None]:
+    """1行から (mark, note) を取り出す。
+
+    既知の見出しパターンに合致すればそれを優先。合致しなくても
+    最初に現れる S/CS パターンを mark として採用し、残りを note にする。
+    """
+    for pat in (_RE_SLAB_HEADER, _RE_SLAB_HEADER2, _RE_SLAB_HEADER3):
+        m = pat.search(line)
+        if m and _SLAB_MARK_RE.match(m.group(1)):
+            return m.group(1), m.group(2)
+    # 既知パターンに合致しない場合: 行内に出てくる最初の S/CS 符号を採る。
+    for tok in re.split(r"[\s,、・_（()）<>]+", line):
+        if _SLAB_MARK_RE.match(tok):
+            note = line.replace(tok, "", 1).strip(" 　_（()）,、・-:<>0123456789")
+            return tok, (note or None)
+    return None, None
+
 
 
 def _group_lines(words: list[dict], tol: float = 2.5) -> list[list[dict]]:
@@ -256,6 +277,12 @@ def _thickness_word_bbox(lw: list[dict]) -> tuple[float, float, float, float] | 
 
 
 def parse_calc_slabs(pdf_path: Path) -> SlabSet:
+    """計算書PDFからスラブを抽出する。
+
+    見出し書式に依存せず、"lx = ..." または "t = NNNmm" を含む行を
+    スラブ計算ブロックのアンカーとして扱う。符号は直前の非空行から
+    S/CS パターンで取り出す。
+    """
     slabs: dict[str, SlabMember] = {}
     for pd in get_pages(pdf_path):
         page_idx = pd.index
@@ -263,26 +290,40 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
         if "床のひび割れ" in pd.text:
             continue
         cur: dict | None = None
-        for lw in _group_lines(pd.words):
+        line_groups = list(_group_lines(pd.words))
+        for idx, lw in enumerate(line_groups):
             line = " ".join(w["text"] for w in lw)
-            hm = (_RE_SLAB_HEADER.search(line) or _RE_SLAB_HEADER2.match(line)
-                  or _RE_SLAB_HEADER3.match(line))
-            if hm:
-                # 計算書には小梁ブロック(No.X_B1 等)も含まれる。スラブ符号
-                # (S?? / CS??) 以外は小梁としてここでは扱わない。
-                if not _SLAB_MARK_RE.match(hm.group(1)):
+
+            # アンカー行（lx=... or t=NNNmm）を起点として新ブロックを開始
+            if _RE_SLAB_ANCHOR.search(line):
+                mark = note = None
+                header_bbox = None
+                # 直前の非空行を数行遡って符号を含む見出しを探す
+                # （"自主訂正No.X" 等の注記が間に挟まることがある）
+                seen_non_empty = 0
+                for back in range(idx - 1, -1, -1):
+                    prev_line = " ".join(w["text"] for w in line_groups[back]).strip()
+                    if not prev_line:
+                        continue
+                    seen_non_empty += 1
+                    cand_mark, cand_note = _extract_mark_and_note_from_header(prev_line)
+                    if cand_mark:
+                        mark, note = cand_mark, cand_note
+                        header_bbox = _span_bbox(line_groups[back])
+                        break
+                    if seen_non_empty >= 6:
+                        break
+                if not mark:
                     cur = None
                     continue
                 cur = {
-                    "mark": hm.group(1),
-                    "note": hm.group(2),
+                    "mark": mark,
+                    "note": note,
                     "page": page_idx,
                     "t": None, "fc": None, "support": None,
                     "top": [], "bottom": [],
                     "bboxes": {},
-                    # 符号を含むヘッダ行(No.X_Sxx ...)の bbox。各フィールド枠を
-                    # 縦に伸ばして符号が必ず見えるようにするために使う。
-                    "header_bbox": _span_bbox(lw),
+                    "header_bbox": header_bbox,
                 }
                 tm = _RE_T.search(line)
                 if tm:
@@ -290,8 +331,15 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                     tb = _thickness_word_bbox(lw)
                     if tb:
                         cur["bboxes"]["thickness"] = tb
+                fm = _RE_FC.search(line)
+                if fm:
+                    cur["fc"] = f"Fc{fm.group(1)}"
+                sm = _RE_SUPPORT.search(line)
+                if sm:
+                    cur["support"] = sm.group(1)
                 _finalize_calc_slab(cur, slabs)
                 continue
+
             if cur is None:
                 continue
             tm = _RE_T.search(line)
