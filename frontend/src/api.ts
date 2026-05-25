@@ -37,6 +37,7 @@ export type CheckResult = {
   calc_slab_count: number;
   slab_diff_count: number;
   slab_diffs: Diff[];
+  warnings?: string[];
 };
 
 export type UploadInfo = { id: string; name: string; role: "drawing" | "calc" };

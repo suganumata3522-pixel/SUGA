@@ -98,6 +98,17 @@ button.secondary:hover:not(:disabled) { background: #1e293b; }
   line-height: 1.6;
 }
 
+.warning-card {
+  background: #fef3c7;
+  border-left: 4px solid #f59e0b;
+  color: #92400e;
+}
+.warning-card h2 {
+  color: #92400e;
+  font-size: 16px;
+  margin: 0;
+}
+
 .card {
   background: #fff;
   border: 1px solid #e5e7eb;

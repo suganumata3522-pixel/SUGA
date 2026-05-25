@@ -213,6 +213,17 @@ export default function App() {
         </div>
       </div>
 
+      {result && result.warnings && result.warnings.length > 0 && (
+        <div className="card warning-card">
+          <h2>⚠ 警告</h2>
+          <ul style={{ margin: "8px 0 0 0", paddingLeft: "20px" }}>
+            {result.warnings.map((w, i) => (
+              <li key={i} style={{ marginBottom: "4px" }}>{w}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {result && (
         <div className="card">
           <div className="card-h2-row">

@@ -139,6 +139,26 @@ def run_check() -> dict:
     def _mismatch_count(items: list[Diff]) -> int:
         return sum(1 for d in items if d.kind.value != "一致")
 
+    # 構造図側の抽出が完全に失敗している（部材ゼロかつ計算書側に多数）
+    # ケースをUIへ明示する。ベクター化された竣工図PDF等で発生しがち。
+    warnings: list[str] = []
+    if not drawing_set.members and not drawing_slabs.slabs and (calc_set.members or calc_slabs.slabs):
+        warnings.append(
+            "構造図PDFから部材・スラブが1件も抽出できませんでした。"
+            "ベクター化された竣工図など、文字情報を持たないPDFの可能性があります。"
+            "テキスト埋め込み版の構造図PDFを使用するか、OCR処理後のPDFをご利用ください。"
+        )
+    elif calc_set.members and not drawing_set.members:
+        warnings.append(
+            "構造図PDFから小梁が1件も抽出できませんでした。"
+            "図面側の小梁リストが画像/ベクター描画のみの可能性があります。"
+        )
+    elif calc_slabs.slabs and not drawing_slabs.slabs:
+        warnings.append(
+            "構造図PDFからスラブが1件も抽出できませんでした。"
+            "図面側のスラブリストが画像/ベクター描画のみの可能性があります。"
+        )
+
     return {
         "drawing_member_count": len(drawing_set.members),
         "calc_member_count": len(calc_set.members),
@@ -148,6 +168,7 @@ def run_check() -> dict:
         "calc_slab_count": len(calc_slabs.slabs),
         "slab_diff_count": _mismatch_count(slab_diffs),
         "slab_diffs": [d.model_dump() for d in slab_diffs],
+        "warnings": warnings,
     }
 
 
