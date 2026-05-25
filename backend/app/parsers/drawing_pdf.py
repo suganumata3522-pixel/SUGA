@@ -359,7 +359,8 @@ class DrawingPdfParser(Parser):
                     needs_review, review_note = self._detect_review_anomaly(
                         words, grp, x_lo, x_hi, positions)
                 fc_code = self._extract_fc_code(words, grp, fc_lo, fc_hi)
-                B = self._extract_section_B(words, grp, fc_lo, fc_hi)
+                mark_center_x = (float(mw["x0"]) + float(mw["x1"])) / 2
+                B = self._extract_section_B(words, grp, fc_lo, fc_hi, mark_center_x)
                 field_bboxes = self._field_bboxes(grp, terr_lo, terr_hi)
                 out.append(BeamMember(
                     mark=mw["text"],
@@ -621,22 +622,41 @@ class DrawingPdfParser(Parser):
         return None
 
     @staticmethod
-    def _extract_section_B(words, grp, x_lo, x_hi) -> int | None:
-        # "断面" ラベルの直下に数値（B）が出る
+    def _extract_section_B(words, grp, x_lo, x_hi, mark_center_x: float | None = None) -> int | None:
+        """断面の幅 B を抽出する。
+
+        図面のセクション列では "断面" ラベルの下に断面図が描かれ、その下に
+        B の数値が記載される。同列には D（高さ）の数値も縦書きの寸法線で
+        書かれることがあり、両者が混在する。実工学的に妥当な範囲
+        (150〜1500mm) に絞り、可能なら符号の中心 x に最も近い候補を採る。
+        """
         y_sec = grp.get("断面")
         if y_sec is None:
             return None
+        # 断面ラベルの少し下から、配筋ラベル（上端筋）の手前までを探索域に取る
+        y_lim_lo = y_sec
+        y_top_label = grp.get("上端筋")
+        y_lim_hi = (y_top_label - 4) if y_top_label is not None else (y_sec + 100)
         candidates = [
             w for w in words
-            if x_lo <= w["x0"] < x_hi
-            and y_sec < float(w["top"]) <= y_sec + 12
+            if x_lo <= float(w["x0"]) < x_hi
+            and y_lim_lo < float(w["top"]) < y_lim_hi
             and w["text"].isdigit()
         ]
         if not candidates:
             return None
-        # 複数あれば最も左に出る数値を採用
-        candidates.sort(key=lambda w: w["x0"])
+        # B の妥当範囲（小梁/基礎梁の幅）にあるものを優先する
+        def _val(w):
+            try: return int(w["text"])
+            except ValueError: return -1
+        plausible = [w for w in candidates if 150 <= _val(w) <= 1500]
+        chosen_pool = plausible or candidates
+        # 符号の中心 x に最も近いものを採用（中心 x 未指定なら最左）
+        if mark_center_x is not None:
+            chosen_pool.sort(key=lambda w: (abs((float(w["x0"]) + float(w["x1"])) / 2 - mark_center_x), float(w["top"])))
+        else:
+            chosen_pool.sort(key=lambda w: float(w["x0"]))
         try:
-            return int(candidates[0]["text"])
+            return int(chosen_pool[0]["text"])
         except ValueError:
             return None
