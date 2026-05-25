@@ -51,7 +51,7 @@ _RE_BOT_LINE = re.compile(r"^下\s+(.+)$")
 _RE_ST_LINE = re.compile(r"^ST\.\s+(.+)$")
 
 # 梁符号の判定（行内に符号として混在する語かを判定するのに使う）
-_BEAM_MARK_RE = re.compile(r"^(?:WCB|FCG|FCB|CGX|CGY|CG|CB|WB|FB|FG|B)\d+[A-Z]?$")
+_BEAM_MARK_RE = re.compile(r"^(?:WCB|FCG|FCB|CGX|CGY|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?$")
 
 
 def _try_header(line: str) -> tuple[list[str], str] | None:
