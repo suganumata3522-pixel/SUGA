@@ -51,7 +51,16 @@ _RE_BOT_LINE = re.compile(r"^下\s+(.+)$")
 _RE_ST_LINE = re.compile(r"^ST\.\s+(.+)$")
 
 # 梁符号の判定（行内に符号として混在する語かを判定するのに使う）
-_BEAM_MARK_RE = re.compile(r"^(?:WCB|FCG|FCB|CGX|CGY|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?$")
+_BEAM_MARK_RE = re.compile(r"^(?:WCB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?$")
+
+# Union System SS7 出力の小梁1行を抽出する正規表現。
+# 例: "[ FB1 ] [B1SL X2 Y3 X3 Y4] 方向 Y 上端 4-D25 4-D25 4-D25 3-D13 MD ..."
+#     "           下端 4-D25 4/2-D25 4-D25 @200 MA ..."
+#     "B×D 500×1850 単スパン φI 1.000 L 8500 ..."
+_RE_SS7_MARK = re.compile(r"^\s*\[\s*((?:WCB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?)\s*\]")
+_RE_SS7_BXD = re.compile(r"B\s*[×x]\s*D\s+(\d+)\s*[×x]\s*(\d+)")
+_RE_SS7_TOP = re.compile(r"上端\s+(.+)")
+_RE_SS7_BOT = re.compile(r"下端\s+(.+)")
 
 
 def _try_header(line: str) -> tuple[list[str], str] | None:
@@ -183,12 +192,100 @@ class StructureSuitePdfParser(Parser):
                             i += 2
                             continue
 
+                # SS7（Union System Super Build）形式の小梁1行を検出
+                # 形式: "[ MARK ] [floor X Y X Y] 方向 X 上端 ... 下端 ... B×D NNN×NNN ..."
+                ss7m = _RE_SS7_MARK.match(line)
+                if ss7m:
+                    self._emit_ss7_beam(
+                        members, ss7m.group(1), lines, i, page_idx,
+                        cur_concrete, cur_main, cur_stirrup,
+                    )
+                    i += 1
+                    continue
+
                 i += 1
 
             # ページ単位で field_bboxes を補完
             _attach_field_bboxes(members, page_words, page_idx)
 
         return MemberSet(source=self.source, file_name=pdf_path.name, members=members)
+
+    @staticmethod
+    def _emit_ss7_beam(
+        members: list[BeamMember], mark: str, lines: list[str], idx: int, page_idx: int,
+        concrete: str | None, main: str | None, stirrup: str | None,
+    ) -> None:
+        """SS7形式の小梁1ブロックを抽出して BeamMember を作る。
+
+        ブロック例:
+          [ FB1 ] [B1SL X2 Y3 X3 Y4] 方向 Y 上端 4-D25 4-D25 4-D25 3-D13 MD ...
+             二重上 1次=1                       反転 無 下端 4-D25 4/2-D25 4-D25 @200 MA ...
+          B×D 500×1850 単スパン  φI 1.000 L 8500 dt 83 83/105 83 ...
+        """
+        # 同じ符号で既に登録があればスキップ（最初の登場ブロックを採用）
+        if any(m.mark == mark for m in members):
+            return
+        # 後続4行までスキャンして 上端/下端/B×D を拾う
+        top_str = bottom_str = None
+        stp_str = None
+        B = D = None
+        # 1行目（current）にも上端が来ることがある
+        for k in range(idx, min(idx + 5, len(lines))):
+            ln = lines[k]
+            if top_str is None:
+                mt = _RE_SS7_TOP.search(ln)
+                if mt:
+                    top_str = mt.group(1)
+            if bottom_str is None:
+                mb = _RE_SS7_BOT.search(ln)
+                if mb:
+                    bottom_str = mb.group(1)
+            if B is None:
+                ms = _RE_SS7_BXD.search(ln)
+                if ms:
+                    B, D = int(ms.group(1)), int(ms.group(2))
+            if top_str and bottom_str and B is not None:
+                break
+
+        if top_str is None and bottom_str is None and B is None:
+            return  # 何も拾えなければ登録しない
+
+        def _rebar_first_tokens(s: str | None) -> tuple[str | None, str | None, str | None, str | None]:
+            """上端/下端のトークン列を分解して 左端/中央/右端/あばら筋(or @ピッチ) を返す。
+            SS7では 左 中 右 のあと、あばら筋本数-径 か @ピッチ単体が続く。"""
+            if not s:
+                return None, None, None, None
+            toks = re.findall(r"\d+(?:/\d+)?-D\d+|\d+-D\d+@\d+|@\d+", s)
+            l = toks[0] if len(toks) >= 1 else None
+            c = toks[1] if len(toks) >= 2 else None
+            r = toks[2] if len(toks) >= 3 else None
+            st = toks[3] if len(toks) >= 4 else None
+            return l, c, r, st
+
+        tl, tc, tr, t_stp = _rebar_first_tokens(top_str)
+        bl, bc, br, b_at = _rebar_first_tokens(bottom_str)
+        # あばら筋: 上端側は "3-D13" 等本数-径、下端側は "@200" 等ピッチ。組合せて "3-D13@200" を作る。
+        if t_stp and b_at and "@" in b_at and "@" not in t_stp:
+            stp_str = f"{t_stp}{b_at}"
+        elif t_stp and "@" in t_stp:
+            stp_str = t_stp
+
+        positions = [
+            PositionRebar(location="左端", top=tl, bottom=bl, stirrup=stp_str),
+            PositionRebar(location="中央", top=tc, bottom=bc, stirrup=stp_str),
+            PositionRebar(location="右端", top=tr, bottom=br, stirrup=stp_str),
+        ]
+        members.append(BeamMember(
+            mark=mark,
+            section=Section(B=B, D=D),
+            positions=positions,
+            concrete_grade=concrete,
+            rebar_grade_main=main,
+            rebar_grade_stirrup=stirrup,
+            source=Source.CALC,
+            location=LocationHint(page=page_idx),
+            note=None,
+        ))
 
     @staticmethod
     def _read_section_table(lines: list[str], symbol_idx: int) -> tuple[list[str], list[str], list[str], list[tuple[int, int]]]:

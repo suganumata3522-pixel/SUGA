@@ -218,6 +218,12 @@ _RE_SUPPORT = re.compile(r"支持条件：([^,、]+)")
 # スラブ計算ブロックのアンカー: "lx = X.XXm" を含む行、または独立で "t = NNNmm" を含む行。
 _RE_SLAB_ANCHOR = re.compile(r"\blx\s*=|\bt\s*=\s*\d+\s*mm")
 
+# Union System SS7 形式のスラブ1行: "S1← [ S1 ] [RSL X2 Y2 X3 Y3] 反転 短辺上 D13@200 ..."
+# 行先頭の "S1←" の符号が図面に反映される「型符号」。"[ S1 ]" は計算上の ID で図面とは別。
+_RE_SS7_SLAB_TYPE = re.compile(r"^\s*(C?S\d+[A-Za-z]?)\s*[←⇐]")
+# SS7 の厚みは "t 200" 形式（mm無し）
+_RE_SS7_T = re.compile(r"\bt\s+(\d{2,3})\b")
+
 
 def _extract_mark_and_note_from_header(line: str) -> tuple[str | None, str | None]:
     """1行から (mark, note) を取り出す。
@@ -366,11 +372,84 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                 if rb:
                     cur["bboxes"]["bottom"] = _span_bbox(rb)
                 _finalize_calc_slab(cur, slabs)
+
+        # SS7（Union System）形式のスラブを抽出
+        _parse_ss7_slabs(line_groups, page_idx, slabs)
     return SlabSet(
         source=Source.CALC,
         file_name=pdf_path.name,
         slabs=list(slabs.values()),
     )
+
+
+def _parse_ss7_slabs(line_groups: list[list[dict]], page_idx: int, slabs: dict) -> None:
+    """SS7（Union System）形式のスラブを抽出する。
+
+    1ブロック=4行程度の塊で、形式は:
+        S1← [ S1 ] [RSL X2 Y2 X3 Y3] 反転 短辺上 D13@200 D13@200    MD ...
+              二重上 1次=1                       無    下 D10@200    D10@200    MA ...
+                  4辺固(RC規準)      w 7.1 t 200   長辺上 D10D13@250 D10D13@250 MD/MA ...
+              Lx，Ly 3910 7700 λ 1.97 dt 47/46         下 D10@250    D10@250    たわみ ...
+
+    符号は `[ MARK ]` から、厚みは `t NNN` (mm無し)、上端は短辺上＋長辺上の集合、
+    下端は短辺と長辺の "下" の集合とする。
+    """
+    for idx, lw in enumerate(line_groups):
+        line = " ".join(w["text"] for w in lw)
+        m = _RE_SS7_SLAB_TYPE.match(line)
+        if not m:
+            continue
+        mark = m.group(1)
+        if mark in slabs:
+            continue
+        # 1ブロックは current_line から 5行先までスキャンする
+        block_text = line
+        for k in range(idx + 1, min(idx + 5, len(line_groups))):
+            block_text += " " + " ".join(w["text"] for w in line_groups[k])
+        # 厚み: "t 200" (mm無し)
+        tm = _RE_SS7_T.search(block_text)
+        thickness = int(tm.group(1)) if tm else None
+        # 配筋: 短辺上 ... 下 ... 長辺上 ... 下 ...
+        top_rebar: list[str] = []
+        bottom_rebar: list[str] = []
+        # 短辺・長辺の上下を分けて拾う
+        for label, target in [("短辺上", top_rebar), ("長辺上", top_rebar)]:
+            mm2 = re.search(rf"{label}\s+((?:[\sD0-9@]|D\d+@\d+)+?)(?=\s+(?:MD|MA|MD/MA|τ|たわみ|短辺|長辺|下|無)|$)", block_text)
+            if mm2:
+                target.extend(_SLAB_REBAR_RE.findall(mm2.group(1)))
+        # 下端は "下 D10@200" 形式（"下端" ではなく単独の "下"）。短辺と長辺で各1行。
+        for mm2 in re.finditer(r"(?<![上端])\s下\s+((?:D\d+(?:D\d+)*@\d+\s*)+)", block_text):
+            bottom_rebar.extend(_SLAB_REBAR_RE.findall(mm2.group(1)))
+
+        # 重複を取り除く（順序保持）
+        def _dedup(xs: list[str]) -> list[str]:
+            seen: set = set(); out: list[str] = []
+            for x in xs:
+                if x not in seen:
+                    seen.add(x); out.append(x)
+            return out
+        top_rebar = _dedup(top_rebar)
+        bottom_rebar = _dedup(bottom_rebar)
+
+        # 異常厚みなら符号名から推定（既存のCID対策）
+        if thickness is None or not (80 <= thickness <= 500):
+            est = _thickness_from_mark(mark)
+            if est is not None:
+                thickness = est
+
+        slabs[mark] = SlabMember(
+            mark=mark,
+            thickness=thickness,
+            thickness_raw=str(thickness) if thickness else None,
+            top_rebar=top_rebar,
+            bottom_rebar=bottom_rebar,
+            concrete_grade=None,
+            support=None,
+            source=Source.CALC,
+            location=LocationHint(page=page_idx, bbox=_span_bbox(lw)),
+            field_bboxes={"thickness": _span_bbox(lw)},
+            note=None,
+        )
 
 
 def _block_bbox(bboxes: dict) -> tuple[float, float, float, float] | None:
