@@ -62,6 +62,13 @@ _RE_SS7_BXD = re.compile(r"B\s*[×x]\s*D\s+(\d+)\s*[×x]\s*(\d+)")
 _RE_SS7_TOP = re.compile(r"上端\s+(.+)")
 _RE_SS7_BOT = re.compile(r"下端\s+(.+)")
 
+# 計算書ブロック内の注記による配筋上書きパターン。
+# 例: "※ 6-4 突出部の検討 より、各階2段筋を追加し、上下共に 2/2-D16 とする。"
+# 表のデフォルト値 (2-D16) を 2/2-D16 で上書きする旨の注記。
+_RE_OVERRIDE_BOTH = re.compile(r"上下共?に?\s*(\d+(?:/\d+)?-D\d+)\s*とする")
+_RE_OVERRIDE_TOP = re.compile(r"上端\s*(?:筋)?\s*(?:を|は)?\s*(\d+(?:/\d+)?-D\d+)\s*とする")
+_RE_OVERRIDE_BOT = re.compile(r"下端\s*(?:筋)?\s*(?:を|は)?\s*(\d+(?:/\d+)?-D\d+)\s*とする")
+
 
 def _try_header(line: str) -> tuple[list[str], str] | None:
     """与えられた1行が既知のブロック見出しならば、(marks, note) を返す。
@@ -314,6 +321,38 @@ class StructureSuitePdfParser(Parser):
         return top_tokens, bottom_tokens, st_tokens, section_tokens
 
     @staticmethod
+    def _find_overrides(lines: list[str], symbol_idx: int) -> tuple[str | None, str | None, str | None]:
+        """符号行の前後で "...とする" 形式の主筋上書き注記を探す。
+
+        戻り値は (上下共通, 上端のみ, 下端のみ)。次の符号行 / 次のブロックの
+        境界に達したら走査を打ち切る。
+        """
+        both = top_only = bot_only = None
+        # 後ろ40行までを走査。途中で次の "符号" or "(N)" 系見出しが来たら停止
+        for j in range(symbol_idx + 1, min(symbol_idx + 50, len(lines))):
+            ln = lines[j]
+            if ln.startswith("符号") and j > symbol_idx + 2:
+                break
+            # 次のブロック見出し（"(N)" "<N>" "No.N" "①" 等）も区切り
+            stripped = ln.lstrip()
+            if (stripped.startswith(("No.", "<")) or
+                (stripped[:1].isdigit() and "_" in stripped[:8]) or
+                (stripped[:1] in _CIRCLED_NUM) or
+                (stripped.startswith("(") and ")" in stripped[:5] and j > symbol_idx + 2)):
+                break
+            mb = _RE_OVERRIDE_BOTH.search(ln)
+            if mb:
+                both = mb.group(1)
+                continue
+            mt = _RE_OVERRIDE_TOP.search(ln)
+            if mt:
+                top_only = mt.group(1)
+            mbt = _RE_OVERRIDE_BOT.search(ln)
+            if mbt:
+                bot_only = mbt.group(1)
+        return both, top_only, bot_only
+
+    @staticmethod
     def _emit_members(
         members: list[BeamMember],
         marks_per_col: list[str],
@@ -333,6 +372,9 @@ class StructureSuitePdfParser(Parser):
         n_pos = len(position_labels)
         n_marks = len(marks_per_col)
         per = max(1, n_pos // n_marks)
+        # 断面計算表の後に "※ ... 上下共に 2/2-D16 とする" などの注記で
+        # 主筋を上書きする計算書がある。符号行の前後数十行から拾う。
+        override_both, override_top, override_bot = StructureSuitePdfParser._find_overrides(lines, symbol_idx)
         for col_idx, mark in enumerate(marks_per_col):
             lo = col_idx * per
             hi = lo + per
@@ -340,6 +382,15 @@ class StructureSuitePdfParser(Parser):
             tops = top_tokens[lo:hi]
             bots = bottom_tokens[lo:hi]
             sts = st_tokens[lo:hi] if st_tokens else []
+            # 注記で上書きがあれば、全位置に適用する
+            if override_both is not None:
+                tops = [override_both] * max(len(labels), 1)
+                bots = [override_both] * max(len(labels), 1)
+            else:
+                if override_top is not None:
+                    tops = [override_top] * max(len(labels), 1)
+                if override_bot is not None:
+                    bots = [override_bot] * max(len(labels), 1)
             positions = [
                 PositionRebar(
                     location=labels[k] if k < len(labels) else "",
