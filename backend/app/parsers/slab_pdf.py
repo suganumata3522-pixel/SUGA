@@ -216,7 +216,10 @@ _RE_T = re.compile(r"\bt\s*=\s*(\d+)\s*mm")
 _RE_FC = re.compile(r"Fc(\d+)")
 _RE_SUPPORT = re.compile(r"支持条件：([^,、]+)")
 # スラブ計算ブロックのアンカー: "lx = X.XXm" を含む行、または独立で "t = NNNmm" を含む行。
-_RE_SLAB_ANCHOR = re.compile(r"\blx\s*=|\bt\s*=\s*\d+\s*mm")
+# Super Build/RC2次部材 形式の "Lx = NNN (cm)" や全角 "ｔ = NN (cm)" にも対応。
+_RE_SLAB_ANCHOR = re.compile(r"\blx\s*=|\bt\s*=\s*\d+\s*mm|\bLx\s*=\s*\d+\s*\(cm\)|ｔ\s*=\s*\d+\s*\(cm\)")
+# Super Build/RC2次部材 のスラブ厚（cm単位、全角ｔ）
+_RE_T_CM = re.compile(r"ｔ\s*=\s*(\d+)\s*\(cm\)")
 
 # Union System SS7 形式のスラブ1行: "S1← [ S1 ] [RSL X2 Y2 X3 Y3] 反転 短辺上 D13@200 ..."
 # 行先頭の "S1←" の符号が図面に反映される「型符号」。"[ S1 ]" は計算上の ID で図面とは別。
@@ -339,6 +342,11 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                     tb = _thickness_word_bbox(lw)
                     if tb:
                         cur["bboxes"]["thickness"] = tb
+                else:
+                    # Super Build/RC2次部材: "ｔ = 20 (cm)" → 200mm
+                    tcm = _RE_T_CM.search(line)
+                    if tcm:
+                        cur["t"] = int(tcm.group(1)) * 10
                 fm = _RE_FC.search(line)
                 if fm:
                     cur["fc"] = f"Fc{fm.group(1)}"
@@ -356,19 +364,25 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                 tb = _thickness_word_bbox(lw)
                 if tb:
                     cur["bboxes"]["thickness"] = tb
+            else:
+                tcm = _RE_T_CM.search(line)
+                if tcm and cur["t"] is None:
+                    cur["t"] = int(tcm.group(1)) * 10
             fm = _RE_FC.search(line)
             if fm and cur["fc"] is None:
                 cur["fc"] = f"Fc{fm.group(1)}"
             sm = _RE_SUPPORT.search(line)
             if sm and cur["support"] is None:
                 cur["support"] = sm.group(1)
-            if line.startswith("上端筋"):
+            # 配筋行は "上端筋 ..." (StructureSuite) と "上端 ..." (Super Build/RC2次部材) の両方を受ける
+            stripped = line.lstrip()
+            if stripped.startswith("上端"):
                 cur["top"] = _SLAB_REBAR_RE.findall(line)
                 rb = [w for w in lw if _SLAB_REBAR_RE.fullmatch(w["text"])]
                 if rb:
                     cur["bboxes"]["top"] = _span_bbox(rb)
                 _finalize_calc_slab(cur, slabs)
-            elif line.startswith("下端筋"):
+            elif stripped.startswith("下端"):
                 cur["bottom"] = _SLAB_REBAR_RE.findall(line)
                 rb = [w for w in lw if _SLAB_REBAR_RE.fullmatch(w["text"])]
                 if rb:
