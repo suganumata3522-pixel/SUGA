@@ -151,12 +151,16 @@ def run_check() -> dict:
     elif calc_set.members and not drawing_set.members:
         warnings.append(
             "構造図PDFから小梁が1件も抽出できませんでした。"
-            "図面側の小梁リストが画像/ベクター描画のみの可能性があります。"
+            "図面側の小梁リストが画像/ベクター描画のみのPDFか、"
+            "別ファイル（二次部材リスト等）に分かれている可能性があります。"
+            "該当する構造図PDFを追加でアップロードしてください。"
         )
     elif calc_slabs.slabs and not drawing_slabs.slabs:
         warnings.append(
             "構造図PDFからスラブが1件も抽出できませんでした。"
-            "図面側のスラブリストが画像/ベクター描画のみの可能性があります。"
+            "図面側のスラブリストが画像/ベクター描画のみのPDFか、"
+            "別ファイル（二次部材リスト等）に分かれている可能性があります。"
+            "該当する構造図PDFを追加でアップロードしてください。"
         )
 
     return {
