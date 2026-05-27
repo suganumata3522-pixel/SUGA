@@ -239,11 +239,11 @@ def _extract_mark_and_note_from_header(line: str) -> tuple[str | None, str | Non
         if m and _SLAB_MARK_RE.match(m.group(1)):
             return m.group(1), m.group(2)
     # 既知パターンに合致しない場合: 行内に出てくる最初の S/CS 符号を採る。
-    # 区切り文字には半角/全角コロン（":" "："）も含める：
-    # 例 "(1)S11：共用廊下" のように S11 と備考をコロンで分ける書式に対応。
-    for tok in re.split(r"[\s,、・_（()）<>:：]+", line):
+    # 区切り文字には半角/全角コロン（":" "："）と「.」（"1.S1" のような書式）も含める。
+    # 例 "(1)S11：共用廊下" / "1.S1：一般階居室" のような書式に対応。
+    for tok in re.split(r"[\s,、・._（()）<>:：]+", line):
         if _SLAB_MARK_RE.match(tok):
-            note = line.replace(tok, "", 1).strip(" 　_（()）,、・-:：<>0123456789")
+            note = line.replace(tok, "", 1).strip(" 　_.（()）,、・-:：<>0123456789")
             return tok, (note or None)
     return None, None
 
