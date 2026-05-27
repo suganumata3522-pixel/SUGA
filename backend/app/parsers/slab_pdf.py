@@ -151,6 +151,12 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
             if est is not None:
                 thickness = est
                 thick_disp = str(est) if not thick_raw else f"{thick_raw}→{est}(符号推定)"
+            else:
+                # 抽出値が壊れていて、かつ符号からも推定不可（CS2 のような
+                # 1桁符号 等）の場合は厚みを不明扱いにする。
+                # （壊れた値で偽の不一致を出さないため）
+                thickness = None
+                thick_disp = None
 
         def _rebar_at(y: float | None) -> list[str]:
             if y is None:
