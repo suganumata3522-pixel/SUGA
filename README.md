@@ -3,6 +3,11 @@
 ゼネコン社内向け、RCマンションの **構造図PDF** と **一貫構造計算ソフト（StructureSuite ほか）の計算書PDF** の
 整合性を自動チェックするためのWebアプリ。
 
+## ユーザーマニュアル
+
+利用者向けの操作手順・PDF 形式の注意事項・AutoCAD からの PDF 出力手順は
+[`docs/USER_MANUAL.md`](docs/USER_MANUAL.md) を参照。
+
 ## 適用範囲（Phase 1）
 
 **RC 小梁（二次部材）** をターゲットとする。
