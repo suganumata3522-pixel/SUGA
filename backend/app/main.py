@@ -140,25 +140,27 @@ def run_check() -> dict:
         return sum(1 for d in items if d.kind.value != "一致")
 
     # 構造図側の抽出が完全に失敗している（部材ゼロかつ計算書側に多数）
-    # ケースをUIへ明示する。ベクター化された竣工図PDF等で発生しがち。
+    # ケースをUIへ明示する。代表的な原因はPDFのテキスト未埋込み。
     warnings: list[str] = []
     if not drawing_set.members and not drawing_slabs.slabs and (calc_set.members or calc_slabs.slabs):
         warnings.append(
             "構造図PDFから部材・スラブが1件も抽出できませんでした。"
-            "ベクター化された竣工図など、文字情報を持たないPDFの可能性があります。"
-            "テキスト埋め込み版の構造図PDFを使用するか、OCR処理後のPDFをご利用ください。"
+            "原因として (1)スキャンPDFや DocuWorks/CubePDF 経由の画像化、"
+            "(2)AutoCAD の SHX フォント使用 が考えられます。"
+            "対処方法は USER_MANUAL.md §3「図面PDFの形式について」"
+            "／§4「AutoCAD から検索可能 PDF を作成する手順」をご参照ください。"
         )
     elif calc_set.members and not drawing_set.members:
         warnings.append(
             "構造図PDFから小梁が1件も抽出できませんでした。"
-            "図面側の小梁リストが画像/ベクター描画のみのPDFか、"
+            "図面側の小梁リストがテキスト情報を持たないPDF（画像化／SHX未対応）か、"
             "別ファイル（二次部材リスト等）に分かれている可能性があります。"
             "該当する構造図PDFを追加でアップロードしてください。"
         )
     elif calc_slabs.slabs and not drawing_slabs.slabs:
         warnings.append(
             "構造図PDFからスラブが1件も抽出できませんでした。"
-            "図面側のスラブリストが画像/ベクター描画のみのPDFか、"
+            "図面側のスラブリストがテキスト情報を持たないPDF（画像化／SHX未対応）か、"
             "別ファイル（二次部材リスト等）に分かれている可能性があります。"
             "該当する構造図PDFを追加でアップロードしてください。"
         )
