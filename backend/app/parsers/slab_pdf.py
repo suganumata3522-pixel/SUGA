@@ -18,9 +18,16 @@ from .pdf_cache import get_pages
 
 # スラブ符号: S18 / S25A / CS26 / CS315 など
 _SLAB_MARK_RE = re.compile(r"^C?S\d+[A-Z]?$")
-# 配筋トークン: D10@200 / D10D13@200 / D16@100 など
-_SLAB_REBAR_RE = re.compile(r"(?:D\d+)+@\d+")
+# 配筋トークン: D10@200 / D10D13@200 / D16@100 / D10,D13@200（カンマ区切り） など。
+# 図面によっては "D10,D13@200" のように径間をカンマで区切るため許容する。
+_SLAB_REBAR_RE = re.compile(r"(?:D\d+[,，]?)+@\d+")
 _THICK_RANGE_RE = re.compile(r"(\d+)")
+
+
+def _norm_rebar(tok: str) -> str:
+    """配筋トークンのカンマ（半角/全角）を除去して表記を統一する。
+    "D10,D13@200" → "D10D13@200"。"""
+    return tok.replace(",", "").replace("，", "")
 
 
 # 符号名から推定する厚み: S18→180, CS25A→250, CS315→315 など
@@ -74,11 +81,25 @@ def _slab_columns(header: list[dict]) -> dict[str, dict | None]:
     """ヘッダ行から各列の語を得る。"""
     def col(pred) -> dict | None:
         return next((w for w in header if pred(w["text"])), None)
+    main = col(lambda t: "主筋" in t)
+    # 同一行に壁リスト等の「符号」が複数並ぶことがある。スラブリストの
+    # 符号列は「主筋方向」の左側にあるため、主筋列より左で最も近い符号を採る。
+    sym_candidates = [w for w in header if w["text"] == "符号"]
+    sym: dict | None = None
+    if main is not None and sym_candidates:
+        main_x = float(main["x0"])
+        left = [w for w in sym_candidates if float(w["x0"]) < main_x]
+        if left:
+            sym = max(left, key=lambda w: float(w["x0"]))  # 主筋列に最も近い左の符号
+        else:
+            sym = min(sym_candidates, key=lambda w: float(w["x0"]))
+    elif sym_candidates:
+        sym = sym_candidates[0]
     return {
-        "sym": col(lambda t: t == "符号"),
+        "sym": sym,
         "thick": col(lambda t: "スラブ" in t or t == "厚"),
         "pos": col(lambda t: t == "位置"),
-        "main": col(lambda t: "主筋" in t),
+        "main": main,
         "dist": col(lambda t: "主筋" not in t and "筋方向" in t),
         "bikou": col(lambda t: t.startswith("備")),
     }
@@ -93,13 +114,32 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
     sym, thick, pos, main, dist, bikou = (
         cols["sym"], cols["thick"], cols["pos"], cols["main"], cols["dist"], cols["bikou"]
     )
-    if sym is None or main is None:
+    if main is None:
         return []
     header_y = min(float(w["top"]) for w in header)
-    sym_x = float(sym["x0"])
+
+    # スラブ符号（S11 / CS12 等）の実際の列 x を求める。ヘッダ行に
+    # 壁リスト等の「符号」しか無い場合があるため、ヘッダより下にある
+    # スラブ符号語の最頻 x をスラブ符号列とみなす（main 列より左）。
+    main_x = float(main["x0"])
+    slab_mark_words = [
+        w for w in words
+        if _SLAB_MARK_RE.match(w["text"])
+        and float(w["top"]) > header_y - 2
+        and float(w["x0"]) < main_x
+    ]
+    if slab_mark_words:
+        # 最も多く出現する x（±5pt 丸め）をスラブ符号列とする
+        from collections import Counter
+        xbin = Counter(round(float(w["x0"]) / 5) * 5 for w in slab_mark_words)
+        sym_x = float(xbin.most_common(1)[0][0])
+    elif sym is not None:
+        sym_x = float(sym["x0"])
+    else:
+        return []
 
     # 各列の x レンジ（ヘッダ語を基準に相対オフセットで決める）
-    thick_lo = float(thick["x0"]) - 25 if thick else sym_x + 30
+    thick_lo = float(thick["x0"]) - 25 if thick else sym_x + 12
     thick_hi = float(thick["x1"]) + 14 if thick else sym_x + 95
     pos_lo = float(pos["x0"]) - 8 if pos else None
     pos_hi = float(pos["x0"]) + 24 if pos else None
@@ -133,15 +173,30 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
         top_y = next((float(lw["top"]) for lw in band_labels if lw["text"] == "上端筋"), None)
         bot_y = next((float(lw["top"]) for lw in band_labels if lw["text"] == "下端筋"), None)
 
-        # スラブ厚（厚さ列・符号行）
-        thick_raw = None
+        # スラブ厚（厚さ列・符号行）。テーパー表記 "210〜180" は数値とチルダが
+        # 別語に割れて x が重なって並ぶことがあるため、厚み列にある該当語を
+        # すべて集めて x 昇順で連結してから解釈する。
+        # テーパー表記 "210〜180" は上段/下段の2行に割れることがあるため
+        # 縦許容を少し広め（±7）に取る。厚み列には他に数値が来ないので安全。
+        thick_parts = [
+            w for w in words
+            if thick_lo <= float(w["x0"]) <= thick_hi
+            and abs(float(w["top"]) - my) <= 7
+            and re.match(r"^[\d〜～\-~]+$", w["text"])
+        ]
         thick_word: dict | None = None
-        for w in words:
-            if thick_lo <= float(w["x0"]) <= thick_hi and abs(float(w["top"]) - my) <= 4:
-                if re.match(r"^[\d〜～\-]+$", w["text"]):
-                    thick_raw = w["text"]
-                    thick_word = w
-                    break
+        thick_raw = None
+        if thick_parts:
+            thick_parts.sort(key=lambda w: float(w["x0"]))
+            # テーパー表記が "180" "210" "~" のように数値とチルダが別語で
+            # x が重なる場合がある。数値（2桁以上）だけを抽出し、複数あれば
+            # 範囲として最大値を採れるよう "〜" で連結する。
+            nums = [w["text"] for w in thick_parts if re.fullmatch(r"\d{2,3}", w["text"])]
+            if nums:
+                thick_raw = "〜".join(nums)
+            else:
+                thick_raw = "".join(w["text"] for w in thick_parts)
+            thick_word = thick_parts[0]
         thickness, thick_disp = (_parse_thickness(thick_raw) if thick_raw else (None, None))
         # 厚み列のフォント/文字コードが不安定で "02〜000" "01〜800" のような
         # 化け値になり、現実離れした厚み (80mm未満 / 500mm超) になることがある。
@@ -164,7 +219,7 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
             vals: list[str] = []
             for w in words:
                 if abs(float(w["top"]) - y) <= 3 and rebar_lo <= float(w["x0"]) <= rebar_hi:
-                    vals.extend(_SLAB_REBAR_RE.findall(w["text"]))
+                    vals.extend(_norm_rebar(t) for t in _SLAB_REBAR_RE.findall(w["text"]))
             return vals
 
         top_rebar = _rebar_at(top_y)
@@ -245,11 +300,15 @@ def _extract_mark_and_note_from_header(line: str) -> tuple[str | None, str | Non
         if m and _SLAB_MARK_RE.match(m.group(1)):
             return m.group(1), m.group(2)
     # 既知パターンに合致しない場合: 行内に出てくる最初の S/CS 符号を採る。
+    # 行頭に丸数字（①②… / ㉑…）が符号に直接くっつく書式 "①CS11 （…）" に
+    # 対応するため、先頭の丸数字をいったん除去してから分割する。
+    _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳㉑㉒㉓㉔㉕㉖㉗㉘㉙㉚㉛㉜㉝㉞㉟㊱㊲㊳㊴㊵㊶㊷㊸㊹㊺㊻㊼㊽㊾㊿"
+    work = line.lstrip(_CIRCLED + " 　")
     # 区切り文字には半角/全角コロン（":" "："）と「.」（"1.S1" のような書式）も含める。
-    # 例 "(1)S11：共用廊下" / "1.S1：一般階居室" のような書式に対応。
-    for tok in re.split(r"[\s,、・._（()）<>:：]+", line):
+    # 例 "(1)S11：共用廊下" / "1.S1：一般階居室" / "①CS11 （…）" のような書式に対応。
+    for tok in re.split(r"[\s,、・._（()）<>:：]+", work):
         if _SLAB_MARK_RE.match(tok):
-            note = line.replace(tok, "", 1).strip(" 　_.（()）,、・-:：<>0123456789")
+            note = work.replace(tok, "", 1).strip(" 　_.（()）,、・-:：<>0123456789")
             return tok, (note or None)
     return None, None
 
@@ -383,13 +442,13 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
             # 配筋行は "上端筋 ..." (StructureSuite) と "上端 ..." (Super Build/RC2次部材) の両方を受ける
             stripped = line.lstrip()
             if stripped.startswith("上端"):
-                cur["top"] = _SLAB_REBAR_RE.findall(line)
+                cur["top"] = [_norm_rebar(t) for t in _SLAB_REBAR_RE.findall(line)]
                 rb = [w for w in lw if _SLAB_REBAR_RE.fullmatch(w["text"])]
                 if rb:
                     cur["bboxes"]["top"] = _span_bbox(rb)
                 _finalize_calc_slab(cur, slabs)
             elif stripped.startswith("下端"):
-                cur["bottom"] = _SLAB_REBAR_RE.findall(line)
+                cur["bottom"] = [_norm_rebar(t) for t in _SLAB_REBAR_RE.findall(line)]
                 rb = [w for w in lw if _SLAB_REBAR_RE.fullmatch(w["text"])]
                 if rb:
                     cur["bboxes"]["bottom"] = _span_bbox(rb)
@@ -438,10 +497,10 @@ def _parse_ss7_slabs(line_groups: list[list[dict]], page_idx: int, slabs: dict) 
         for label, target in [("短辺上", top_rebar), ("長辺上", top_rebar)]:
             mm2 = re.search(rf"{label}\s+((?:[\sD0-9@]|D\d+@\d+)+?)(?=\s+(?:MD|MA|MD/MA|τ|たわみ|短辺|長辺|下|無)|$)", block_text)
             if mm2:
-                target.extend(_SLAB_REBAR_RE.findall(mm2.group(1)))
+                target.extend(_norm_rebar(t) for t in _SLAB_REBAR_RE.findall(mm2.group(1)))
         # 下端は "下 D10@200" 形式（"下端" ではなく単独の "下"）。短辺と長辺で各1行。
         for mm2 in re.finditer(r"(?<![上端])\s下\s+((?:D\d+(?:D\d+)*@\d+\s*)+)", block_text):
-            bottom_rebar.extend(_SLAB_REBAR_RE.findall(mm2.group(1)))
+            bottom_rebar.extend(_norm_rebar(t) for t in _SLAB_REBAR_RE.findall(mm2.group(1)))
 
         # 重複を取り除く（順序保持）
         def _dedup(xs: list[str]) -> list[str]:

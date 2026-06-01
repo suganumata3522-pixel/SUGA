@@ -159,6 +159,55 @@ def _extract_annot_words(page, page_height: float) -> list[dict]:
     return out
 
 
+# リスト表の左ラベルとして現れる語。CAD によっては縦書き 2 文字が
+# "符"+"号"・"位"+"置"・"断"+"面"・"腹"+"筋" のように同一行内の隣接
+# する2語に分割されて抽出されることがある。これらを結合して 1 語に戻す。
+_LABEL_MERGE_TARGETS = {
+    ("符", "号"): "符号",
+    ("位", "置"): "位置",
+    ("断", "面"): "断面",
+    ("腹", "筋"): "腹筋",
+}
+
+
+def _merge_split_labels(words: list[dict]) -> list[dict]:
+    """同一行で隣接する2語が既知のラベル（符号/位置/断面/腹筋）に
+    なる場合に1語へ結合する。
+
+    縦書き SHX 由来などで "符"+"号" のように 2 単語に割れたラベルを
+    パーサーが認識できるよう復元する。配筋値や寸法には影響しない
+    （結合対象は _LABEL_MERGE_TARGETS の漢字ペアのみ）。
+    """
+    if not words:
+        return words
+    # y(top) でグルーピングして同一行内の隣接ペアを調べる
+    sorted_w = sorted(words, key=lambda w: (round(float(w["top"]) / 2), float(w["x0"])))
+    consumed: set[int] = set()
+    merged: list[dict] = []
+    n = len(sorted_w)
+    for i in range(n):
+        if i in consumed:
+            continue
+        w = sorted_w[i]
+        if i + 1 < n:
+            nxt = sorted_w[i + 1]
+            pair = (w["text"], nxt["text"])
+            if (pair in _LABEL_MERGE_TARGETS
+                    and abs(float(w["top"]) - float(nxt["top"])) <= 3
+                    and 0 <= float(nxt["x0"]) - float(w["x1"]) <= 8):
+                merged.append({
+                    "text": _LABEL_MERGE_TARGETS[pair],
+                    "x0": float(w["x0"]),
+                    "x1": float(nxt["x1"]),
+                    "top": min(float(w["top"]), float(nxt["top"])),
+                    "bottom": max(float(w["bottom"]), float(nxt["bottom"])),
+                })
+                consumed.add(i + 1)
+                continue
+        merged.append(w)
+    return merged
+
+
 # 直近 N ファイル分のみ保持する簡易 LRU（メモリ肥大化を防ぐ）
 _MAX_ENTRIES = 6
 _cache: dict[tuple[str, float], list[PageData]] = {}
@@ -195,6 +244,8 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
                 # 注釈テキストも extract_text 相当に追記
                 annot_text = "\n".join(w["text"] for w in annot_words)
                 raw_text = (raw_text + "\n" + annot_text) if raw_text else annot_text
+            # 縦書きで割れたラベル（符 号 等）を1語に結合
+            raw_words = _merge_split_labels(raw_words)
             pages.append(PageData(
                 index=i,
                 text=normalize_pdf_text(raw_text),
