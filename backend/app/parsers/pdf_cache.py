@@ -110,7 +110,13 @@ def _extract_annot_words(page, page_height: float) -> list[dict]:
     AutoCAD 2021 以前は SHX 文字を実テキスト化できず PDFSHX=1 が
     最大設定なので、この補完で構造図の符号・配筋値を抽出できる
     ようになる。
+
+    注釈内のテキストは元図面で縦書きされていた場合 "符 号" のように
+    全角スペースで区切られて1つの注釈に入る。これを split() で
+    分断するとパーサーが "符号" を見つけられなくなるため、注釈は
+    1件あたり1単語として扱い、内部の空白類はすべて除去する。
     """
+    import re as _re
     out: list[dict] = []
     try:
         annots = page.annots or []
@@ -123,26 +129,33 @@ def _extract_annot_words(page, page_height: float) -> list[dict]:
             continue
         if not contents or not isinstance(contents, str):
             continue
-        # rect は [x0, y0_bot, x1, y1_top]（PDF座標、原点は左下）。
-        # pdfplumber のwordは原点が左上なので y を反転する。
+        # 注釈内の空白類（半角・全角・改行・タブ）を全て除去して1単語にする。
+        # 縦書き SHX 文字が "符 号"・"断 面" のように分かれて入る対策。
+        token = _re.sub(r"\s+", "", contents)
+        if not token:
+            continue
+        # 座標を取得（pdfplumber の annot は x0/x1/top/bottom を保持）
         try:
-            x0, y0_bot, x1, y1_top = annot.get("x0"), annot.get("y0"), annot.get("x1"), annot.get("y1")
-            if any(v is None for v in (x0, y0_bot, x1, y1_top)):
+            x0 = annot.get("x0")
+            x1 = annot.get("x1")
+            top = annot.get("top")
+            bottom = annot.get("bottom")
+            if any(v is None for v in (x0, x1, top, bottom)):
+                # fallback: rect の値（PDF座標、左下原点）から変換
                 rect = annot.get("rect") or [0, 0, 0, 0]
-                x0, y0_bot, x1, y1_top = rect
-            top = page_height - float(y1_top)
-            bottom = page_height - float(y0_bot)
+                rx0, ry0_bot, rx1, ry1_top = rect
+                x0 = rx0; x1 = rx1
+                top = page_height - float(ry1_top)
+                bottom = page_height - float(ry0_bot)
         except Exception:
             continue
-        # 注釈の本文は複数語を含むことがあるので空白で分割
-        for token in contents.split():
-            out.append({
-                "text": token,
-                "x0": float(x0),
-                "x1": float(x1),
-                "top": top,
-                "bottom": bottom,
-            })
+        out.append({
+            "text": token,
+            "x0": float(x0),
+            "x1": float(x1),
+            "top": float(top),
+            "bottom": float(bottom),
+        })
     return out
 
 
