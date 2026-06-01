@@ -99,6 +99,53 @@ def _fix_reversed_digits(text: str) -> str:
     return reversed_text
 
 
+def _extract_annot_words(page, page_height: float) -> list[dict]:
+    """PDFの注釈（コメント）から擬似的な単語リストを生成する。
+
+    AutoCAD で `PDFSHX = 1` 設定で PDF 出力すると、SHX 文字が
+    実テキストではなく Text 注釈（コメント）として埋め込まれる。
+    pdfplumber の標準 extract_words はこれを拾わないので、
+    `page.annots` から内容を取り出して単語として補完する。
+
+    AutoCAD 2021 以前は SHX 文字を実テキスト化できず PDFSHX=1 が
+    最大設定なので、この補完で構造図の符号・配筋値を抽出できる
+    ようになる。
+    """
+    out: list[dict] = []
+    try:
+        annots = page.annots or []
+    except Exception:
+        return out
+    for annot in annots:
+        try:
+            contents = annot.get("contents") or ""
+        except Exception:
+            continue
+        if not contents or not isinstance(contents, str):
+            continue
+        # rect は [x0, y0_bot, x1, y1_top]（PDF座標、原点は左下）。
+        # pdfplumber のwordは原点が左上なので y を反転する。
+        try:
+            x0, y0_bot, x1, y1_top = annot.get("x0"), annot.get("y0"), annot.get("x1"), annot.get("y1")
+            if any(v is None for v in (x0, y0_bot, x1, y1_top)):
+                rect = annot.get("rect") or [0, 0, 0, 0]
+                x0, y0_bot, x1, y1_top = rect
+            top = page_height - float(y1_top)
+            bottom = page_height - float(y0_bot)
+        except Exception:
+            continue
+        # 注釈の本文は複数語を含むことがあるので空白で分割
+        for token in contents.split():
+            out.append({
+                "text": token,
+                "x0": float(x0),
+                "x1": float(x1),
+                "top": top,
+                "bottom": bottom,
+            })
+    return out
+
+
 # 直近 N ファイル分のみ保持する簡易 LRU（メモリ肥大化を防ぐ）
 _MAX_ENTRIES = 6
 _cache: dict[tuple[str, float], list[PageData]] = {}
@@ -125,12 +172,22 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
             # CID不具合の正規化＋縦書き数字の逆順補正を適用
             for w in raw_words:
                 w["text"] = _fix_reversed_digits(normalize_pdf_text(w["text"]))
+            # AutoCAD PDFSHX=1 で埋め込まれたコメント注釈も単語として取り込む
+            page_height = float(page.height)
+            annot_words = _extract_annot_words(page, page_height)
+            for w in annot_words:
+                w["text"] = _fix_reversed_digits(normalize_pdf_text(w["text"]))
+            if annot_words:
+                raw_words = raw_words + annot_words
+                # 注釈テキストも extract_text 相当に追記
+                annot_text = "\n".join(w["text"] for w in annot_words)
+                raw_text = (raw_text + "\n" + annot_text) if raw_text else annot_text
             pages.append(PageData(
                 index=i,
                 text=normalize_pdf_text(raw_text),
                 words=raw_words,
                 width=float(page.width),
-                height=float(page.height),
+                height=page_height,
             ))
 
     _cache[key] = pages
@@ -138,4 +195,6 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
         oldest = next(iter(_cache))
         del _cache[oldest]
     return pages
+
+
 
