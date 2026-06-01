@@ -625,51 +625,61 @@ class DrawingPdfParser(Parser):
     def _extract_section_B(words, grp, x_lo, x_hi, mark_center_x: float | None = None) -> int | None:
         """断面の幅 B を抽出する。
 
-        図面の断面リストでは "断面" ラベルの位置は物件によって異なる:
-          - パターンA: 断面ラベルの下に断面図と寸法が描かれる
-          - パターンB: 位置ラベル直下に断面図と寸法、その下に "断面"
-            (ラベルが下にある)
-        どちらも対応するため、"位置" 行以降〜"上端筋" 行手前 までを探索域とし、
-        妥当範囲 (150〜1500mm) のものを優先、可能なら符号の中心 x に最も近い候補を採る。
+        梁リストの断面図には、上から順に
+          ・梁天端レベル（"1SL-350" 等、基準レベルからの下がり）
+          ・梁成 D（断面図の縦寸法）
+          ・梁幅 B（断面図の最下段に書かれる横寸法。左右対称で同じ値が
+            2 つ並ぶことが多い）
+        が縦に並ぶ。したがって **梁幅 B は断面図領域の最下段（上端筋
+        ラベルの直前）にある数値** とみなすのが最も確実。
+
+        位置/断面ラベルの y は物件によって上下するため、探索域は
+        「位置ラベル直下〜上端筋ラベル直前」とし、その中で最下段
+        （top が最大）の妥当値（150〜1500mm）を採る。同じ段に複数
+        あれば符号中心 x に最も近いものを採る。
         """
         y_sec = grp.get("断面")
         y_pos = grp.get("位置")
         y_top_label = grp.get("上端筋")
-        if y_sec is None:
+        if y_sec is None and y_pos is None:
             return None
 
         def _val(w):
             try: return int(w["text"])
             except ValueError: return -1
 
-        def _pick(lo: float, hi: float) -> int | None:
-            cands = [
-                w for w in words
-                if x_lo <= float(w["x0"]) < x_hi
-                and lo < float(w["top"]) < hi
-                and w["text"].isdigit()
-            ]
-            if not cands:
-                return None
-            plausible = [w for w in cands if 150 <= _val(w) <= 1500]
-            pool = plausible or cands
-            if mark_center_x is not None:
-                pool.sort(key=lambda w: (abs((float(w["x0"]) + float(w["x1"])) / 2 - mark_center_x), float(w["top"])))
-            else:
-                pool.sort(key=lambda w: float(w["x0"]))
-            try: return int(pool[0]["text"])
-            except ValueError: return None
-
-        # まずは「断面ラベルの直下〜上端筋ラベルの手前」を探索（標準的なレイアウト）
-        y_hi_below = (float(y_top_label) - 4) if y_top_label is not None else (float(y_sec) + 100)
-        b = _pick(float(y_sec), y_hi_below)
-        if b is not None and 150 <= b <= 1500:
-            return b
-        # 妥当な値が見つからなければ「位置ラベル直下〜断面ラベル直上」も探索
-        # （断面ラベルが寸法の下に書かれる物件向け）
+        # 探索域の上端：位置ラベル直下（無ければ断面ラベルの少し上）
         if y_pos is not None:
-            b_above = _pick(float(y_pos) + 8, float(y_sec))
-            if b_above is not None:
-                return b_above
-        return b  # 妥当範囲外でも何かは返す（None ならそのまま）
+            lo = float(y_pos) + 4
+        else:
+            lo = float(y_sec) - 40
+        # 探索域の下端：上端筋ラベル直前（無ければ断面ラベル + 100）
+        if y_top_label is not None:
+            hi = float(y_top_label) - 3
+        elif y_sec is not None:
+            hi = float(y_sec) + 100
+        else:
+            hi = lo + 120
+
+        cands = [
+            w for w in words
+            if x_lo <= float(w["x0"]) < x_hi
+            and lo < float(w["top"]) < hi
+            and w["text"].isdigit()
+            and 150 <= _val(w) <= 1500
+        ]
+        if not cands:
+            return None
+        # 最下段（top 最大）を優先。top を ±4pt でビン化して同段扱いにし、
+        # 同段内では符号中心 x に最も近いものを採る。
+        max_top = max(float(w["top"]) for w in cands)
+        bottom_row = [w for w in cands if abs(float(w["top"]) - max_top) <= 4]
+        if mark_center_x is not None:
+            bottom_row.sort(key=lambda w: abs((float(w["x0"]) + float(w["x1"])) / 2 - mark_center_x))
+        else:
+            bottom_row.sort(key=lambda w: float(w["x0"]))
+        try:
+            return int(bottom_row[0]["text"])
+        except ValueError:
+            return None
 
