@@ -165,6 +165,22 @@ def run_check() -> dict:
             "該当する構造図PDFを追加でアップロードしてください。"
         )
 
+    # 逆方向：構造図には部材があるのに計算書側がゼロのケース。
+    # 計算書PDFが小梁編／スラブ編に分かれており片方しか上がっていない、
+    # または棟別で別計算書になっている可能性がある。
+    if drawing_set.members and not calc_set.members and calc_slabs.slabs:
+        warnings.append(
+            "計算書PDFから小梁が1件も抽出できませんでした。"
+            "計算書がスラブ編のみで小梁編が別ファイルに分かれている可能性があります。"
+            "該当する小梁計算書PDFを追加でアップロードしてください。"
+        )
+    if drawing_slabs.slabs and not calc_slabs.slabs and calc_set.members:
+        warnings.append(
+            "計算書PDFからスラブが1件も抽出できませんでした。"
+            "計算書が小梁編のみでスラブ編が別ファイルに分かれている可能性があります。"
+            "該当するスラブ計算書PDFを追加でアップロードしてください。"
+        )
+
     return {
         "drawing_member_count": len(drawing_set.members),
         "calc_member_count": len(calc_set.members),
