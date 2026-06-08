@@ -87,15 +87,18 @@ def _try_header(line: str) -> tuple[list[str], str] | None:
 def _tokens_top_bottom(line: str) -> list[str]:
     """主筋行の値を位置数に対応するトークンへ分割する。
     "4-D22 4-D22 4/2-D22" → ["4-D22", "4-D22", "4/2-D22"]
+    一部 PDF は "3 -D25" のように本数と "-D??" の間に空白を含むため
+    空白を許容し、抽出後の文字列からは空白を除去する。
     """
-    return re.findall(r"\d+(?:/\d+)?-D\d+", line)
+    return [re.sub(r"\s+", "", t) for t in re.findall(r"\d+(?:/\d+)?\s*-D\d+", line)]
 
 
 def _tokens_st(line: str) -> list[str]:
     """ST. 行の値を位置数に対応するトークンへ分割する。
     "2-D10@150 2-D10@150 2-D10@150" → 各位置 "2-D10@150"
+    一部 PDF は "2 -D10 @150" のように空白で分割されるため空白を許容する。
     """
-    return re.findall(r"\d+-D\d+@\d+", line)
+    return [re.sub(r"\s+", "", t) for t in re.findall(r"\d+\s*-D\d+\s*@\d+", line)]
 
 
 def _split_positions(label_line: str) -> list[str]:

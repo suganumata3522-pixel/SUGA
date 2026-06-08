@@ -273,7 +273,10 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
 _RE_SLAB_HEADER = re.compile(r"No\.\d+(?:-\d+)?[_ ]\s*([A-Z]+\d+[A-Z]?)\s*[（(]([^）)]*)[）)]")
 _RE_SLAB_HEADER2 = re.compile(r"^\s*\d+(?:-\d+)?_([A-Z]+\d+[A-Z]?)_(.+?)\s*$")
 _RE_SLAB_HEADER3 = re.compile(r"^\s*<\d+>\s*([A-Z]+\d+[A-Z]?)(?:[（(][^）)]*[）)])?\s+(.*)$")
-_RE_T = re.compile(r"\bt\s*=\s*(\d+)\s*mm")
+# "t = 180mm" 形式と、mm 省略の "t = 180" 形式の両方に対応。
+# 後者は "dt" や時刻表記との誤マッチを避けるため、続く文字が "," " " "/" "(" 等の
+# 区切りであることを要求する。
+_RE_T = re.compile(r"(?<![A-Za-z])t\s*=\s*(\d+)\s*(?:mm|(?=[\s,，)/]|$))")
 _RE_FC = re.compile(r"Fc(\d+)")
 _RE_SUPPORT = re.compile(r"支持条件：([^,、]+)")
 # スラブ計算ブロックのアンカー: "lx = X.XXm" を含む行、または独立で "t = NNNmm" を含む行。
@@ -439,8 +442,13 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
             sm = _RE_SUPPORT.search(line)
             if sm and cur["support"] is None:
                 cur["support"] = sm.group(1)
-            # 配筋行は "上端筋 ..." (StructureSuite) と "上端 ..." (Super Build/RC2次部材) の両方を受ける
+            # 配筋行のバリエーション:
+            #   "上端筋 ..." (StructureSuite 標準)
+            #   "上端 ..." (Super Build/RC2次部材)
+            #   "配筋 上端 ..." (一部のスラブ計算書フォーマット)
             stripped = line.lstrip()
+            if stripped.startswith("配筋"):
+                stripped = stripped[2:].lstrip()
             if stripped.startswith("上端"):
                 cur["top"] = [_norm_rebar(t) for t in _SLAB_REBAR_RE.findall(line)]
                 rb = [w for w in lw if _SLAB_REBAR_RE.fullmatch(w["text"])]

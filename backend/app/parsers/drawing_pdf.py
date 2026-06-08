@@ -41,6 +41,9 @@ def _detect_label_rows(words: list[dict], label_x_max: float = 80.0) -> list[_La
         if w["x0"] >= label_x_max:
             continue
         t = w["text"]
+        # 「スターラップ」は STP と同義のラベル。一部の図面リストで使われる。
+        if t == "スターラップ":
+            t = "STP"
         if t in {"符号", "位置", "断面", "上端筋", "下端筋", "STP", "腹筋"}:
             rows.append(_LabelRow(y=float(w["top"]), label=t))
     rows.sort(key=lambda r: r.y)
@@ -50,6 +53,10 @@ def _detect_label_rows(words: list[dict], label_x_max: float = 80.0) -> list[_La
 def _group_rows(label_rows: list[_LabelRow]) -> list[dict]:
     """ラベル列を「符号」をトリガーに行グループに分割する。
     1つの符号グループには {符号, 位置, 断面, 上端筋, 下端筋, STP, 腹筋} の各 y が入る。
+
+    STP（スターラップ）が縦書きで描画され値より上の y を持つレイアウトでは、
+    STP 値の行は下端筋と腹筋の間にあるため、(下端筋_y + 腹筋_y) / 2 を
+    STP 行 y として補正する。
     """
     groups: list[dict] = []
     cur: dict | None = None
@@ -59,6 +66,14 @@ def _group_rows(label_rows: list[_LabelRow]) -> list[dict]:
             groups.append(cur)
         elif cur is not None:
             cur[r.label] = r.y
+    for g in groups:
+        stp_y = g.get("STP")
+        bot_y = g.get("下端筋")
+        web_y = g.get("腹筋")
+        if stp_y is not None and bot_y is not None and web_y is not None:
+            mid = (bot_y + web_y) / 2
+            if abs(stp_y - mid) > 3:
+                g["STP"] = mid
     return groups
 
 
@@ -150,9 +165,16 @@ def _collect_pos_labels(words: list[dict], pos_y: float, x_min: float, x_max: fl
     return out
 
 
+_REBAR_COMBINED_RE = re.compile(rf"^\d+(?:/\d+)?-D{_BAR_SIZE}(?:@\d+)?$")
+
+
 def _rebar_pairs(words: list[dict], y: float, x_min: float, x_max: float) -> list[tuple[float, str]]:
     """y 行・x 範囲内の鉄筋ペアを (中心x, 連結文字列) で返す。
-    "N" + "-D??" (+ "@???") を1つの値とみなす。
+
+    PDF によってトークン分割が異なる:
+    - 分離形式: "N" + "-D??" (+ "@???") の 2〜3 トークン
+    - 結合形式: "N-D??" あるいは "N-D??@???" の 1 トークン
+    両方を 1 つの値として扱う。
     """
     ws = sorted(
         [w for w in words
@@ -163,9 +185,20 @@ def _rebar_pairs(words: list[dict], y: float, x_min: float, x_max: float) -> lis
     i = 0
     while i < len(ws):
         w = ws[i]
-        if re.match(r"^\d+(?:/\d+)?$", w["text"]) and i + 1 < len(ws) and ws[i + 1]["text"].startswith("-D"):
+        text = w["text"]
+        if _REBAR_COMBINED_RE.match(text):
+            cx = (float(w["x0"]) + float(w.get("x1", w["x0"] + 8))) / 2
+            toks = [text]
+            j = i + 1
+            # 結合形式でも @ピッチが別トークンの場合がある
+            if "@" not in text and j < len(ws) and re.match(r"^@\d+$", ws[j]["text"]):
+                toks.append(ws[j]["text"])
+                j += 1
+            pairs.append((cx, "".join(toks)))
+            i = j
+        elif re.match(r"^\d+(?:/\d+)?$", text) and i + 1 < len(ws) and ws[i + 1]["text"].startswith("-D"):
             nxt = ws[i + 1]
-            toks = [w["text"], nxt["text"]]
+            toks = [text, nxt["text"]]
             cx = (float(w["x0"]) + float(nxt.get("x1", nxt["x0"] + 8))) / 2
             j = i + 2
             if j < len(ws) and re.match(r"^@\d+$", ws[j]["text"]):
@@ -272,7 +305,20 @@ class DrawingPdfParser(Parser):
 
     def _parse_label_block(self, words: list[dict], label_x0: float, page_idx: int) -> list[BeamMember]:
         # この label_x0 起点のラベル群と、その右側に並ぶ符号セル群を扱う。
-        label_words = [w for w in words if abs(w["x0"] - label_x0) <= 5 or (label_x0 <= w["x0"] < label_x0 + 35 and w["text"] in {"符号", "位置", "断面", "上端筋", "下端筋", "STP", "腹筋"})]
+        # ラベル列の語を収集。"スターラップ" のような長い語は左方向に
+        # はみ出して x0 < label_x0 になることがあるため、語の中心または
+        # 右端が label_x0 近傍にあるラベルも拾う。
+        _KNOWN_LABELS = {"符号", "位置", "断面", "上端筋", "下端筋", "STP", "スターラップ", "腹筋"}
+        label_words = []
+        for w in words:
+            if abs(w["x0"] - label_x0) <= 5:
+                label_words.append(w)
+            elif label_x0 <= w["x0"] < label_x0 + 35 and w["text"] in _KNOWN_LABELS:
+                label_words.append(w)
+            elif w["text"] in _KNOWN_LABELS:
+                cx = (float(w["x0"]) + float(w["x1"])) / 2
+                if abs(cx - (label_x0 + 10)) <= 30:
+                    label_words.append(w)
         rows = _detect_label_rows(label_words, label_x_max=label_x0 + 40)
         groups = _group_rows(rows)
         if not groups:
