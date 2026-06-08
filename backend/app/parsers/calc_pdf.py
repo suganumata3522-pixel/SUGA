@@ -72,16 +72,64 @@ _RE_OVERRIDE_BOT = re.compile(r"下端\s*(?:筋)?\s*(?:を|は)?\s*(\d+(?:/\d+)?
 
 def _try_header(line: str) -> tuple[list[str], str] | None:
     """与えられた1行が既知のブロック見出しならば、(marks, note) を返す。
-    どのパターンにも合致しなければ None。"""
+    どのパターンにも合致しなければ None。
+
+    "WCB1,1A" のように先頭符号のプレフィックス（"WCB"）が省略された
+    続きの符号 ("1A" → "WCB1A") は、直前の有効符号からプレフィックス
+    を補完する。"""
     for pat in _HEADER_PATTERNS:
         m = pat.match(line)
         if not m:
             continue
         marks_field = m.group(1)
         note = (m.group(2) if m.lastindex and m.lastindex >= 2 else "") or ""
-        marks = [s for s in re.split(r"[・,、]", marks_field) if s]
+        raw_marks = [s for s in re.split(r"[・,、]", marks_field) if s]
+        marks: list[str] = []
+        prefix = ""
+        for tok in raw_marks:
+            if _BEAM_MARK_RE.match(tok):
+                marks.append(tok)
+                pm = re.match(r"^([A-Z]+)\d", tok)
+                if pm:
+                    prefix = pm.group(1)
+            elif prefix and _BEAM_MARK_RE.match(prefix + tok):
+                marks.append(prefix + tok)
+            else:
+                marks.append(tok)
         return marks, note.strip()
     return None
+
+
+def _parse_symbol_line(marks_field: str) -> list[list[str]]:
+    """符号行を「列ごとの符号リスト」に分解する。
+
+    列はスペース区切り、同一列内の符号はカンマ区切り。
+    "WCB1,1A" のように後続符号でプレフィックスが省略されている場合は
+    直前の有効符号からプレフィックスを補完して "WCB1A" に展開する。
+
+    例:
+      "B1 B2 B3"        → [['B1'], ['B2'], ['B3']]
+      "WCB1,1A"         → [['WCB1', 'WCB1A']]
+      "B1 WCB1,1A B2"   → [['B1'], ['WCB1', 'WCB1A'], ['B2']]
+    """
+    columns: list[list[str]] = []
+    for chunk in re.split(r"\s+", marks_field.strip()):
+        if not chunk:
+            continue
+        raw_tokens = [t for t in re.split(r"[,、・]", chunk) if t]
+        marks: list[str] = []
+        prefix = ""
+        for tok in raw_tokens:
+            if _BEAM_MARK_RE.match(tok):
+                marks.append(tok)
+                pm = re.match(r"^([A-Z]+)\d", tok)
+                if pm:
+                    prefix = pm.group(1)
+            elif prefix and _BEAM_MARK_RE.match(prefix + tok):
+                marks.append(prefix + tok)
+        if marks:
+            columns.append(marks)
+    return columns
 
 
 def _tokens_top_bottom(line: str) -> list[str]:
@@ -185,16 +233,17 @@ class StructureSuitePdfParser(Parser):
                     mark_match = _RE_MARK_LINE.match(line)
                     pos_line = lines[i + 1] if i + 1 < len(lines) else ""
                     if mark_match and pos_line.startswith("位置"):
-                        marks_per_col = re.split(r"\s+", mark_match.group(1).strip())
-                        # 符号行から梁符号として妥当なものだけを残す
-                        marks_per_col = [m for m in marks_per_col if _BEAM_MARK_RE.match(m)]
-                        if marks_per_col:
+                        # 列はスペースで区切られ、1列内に "WCB1,1A" のように
+                        # カンマで複数の符号がまとめられることがある。
+                        # 同列の符号は同じ位置・配筋を共有する。
+                        column_marks = _parse_symbol_line(mark_match.group(1).strip())
+                        if column_marks:
                             position_labels = _split_positions(_RE_POS_LINE.match(pos_line).group(1))
                             top_tokens, bottom_tokens, st_tokens, section_tokens = (
                                 self._read_section_table(lines, i)
                             )
                             self._emit_members(
-                                members, marks_per_col, position_labels,
+                                members, column_marks, position_labels,
                                 top_tokens, bottom_tokens, st_tokens, section_tokens,
                                 lines, i, page_idx,
                                 cur_concrete, cur_main, cur_stirrup,
@@ -358,7 +407,7 @@ class StructureSuitePdfParser(Parser):
     @staticmethod
     def _emit_members(
         members: list[BeamMember],
-        marks_per_col: list[str],
+        column_marks: list[list[str]],
         position_labels: list[str],
         top_tokens: list[str],
         bottom_tokens: list[str],
@@ -371,14 +420,18 @@ class StructureSuitePdfParser(Parser):
         main: str | None,
         stirrup: str | None,
     ) -> None:
-        """断面計算表の1組を BeamMember として登録/マージする。"""
+        """断面計算表の1組を BeamMember として登録/マージする。
+
+        column_marks は「列ごとの符号リスト」。同じ列内の符号
+        （例: WCB1,WCB1A）は同じ位置/配筋を共有する。
+        """
         n_pos = len(position_labels)
-        n_marks = len(marks_per_col)
-        per = max(1, n_pos // n_marks)
+        n_cols = len(column_marks)
+        per = max(1, n_pos // n_cols)
         # 断面計算表の後に "※ ... 上下共に 2/2-D16 とする" などの注記で
         # 主筋を上書きする計算書がある。符号行の前後数十行から拾う。
         override_both, override_top, override_bot = StructureSuitePdfParser._find_overrides(lines, symbol_idx)
-        for col_idx, mark in enumerate(marks_per_col):
+        for col_idx, col_mark_group in enumerate(column_marks):
             lo = col_idx * per
             hi = lo + per
             labels = position_labels[lo:hi]
@@ -394,37 +447,39 @@ class StructureSuitePdfParser(Parser):
                     tops = [override_top] * max(len(labels), 1)
                 if override_bot is not None:
                     bots = [override_bot] * max(len(labels), 1)
-            positions = [
-                PositionRebar(
-                    location=labels[k] if k < len(labels) else "",
-                    top=tops[k] if k < len(tops) else None,
-                    bottom=bots[k] if k < len(bots) else None,
-                    stirrup=sts[k] if k < len(sts) else (sts[-1] if sts else None),
-                )
-                for k in range(len(labels))
-            ]
-            existing = next((m for m in members if m.mark == mark), None)
             # 断面: 断面計算表の列ごとの (B, D) を採用。無ければ最終列のものに倒す。
             B = D = None
             if col_idx < len(section_tokens):
                 B, D = section_tokens[col_idx]
             elif section_tokens:
                 B, D = section_tokens[-1]
-            if existing is None:
-                note = _find_note_for_mark(lines, symbol_idx, mark)
-                members.append(BeamMember(
-                    mark=mark,
-                    section=Section(B=B, D=D),
-                    positions=positions,
-                    concrete_grade=concrete,
-                    rebar_grade_main=main,
-                    rebar_grade_stirrup=stirrup,
-                    source=Source.CALC,
-                    location=LocationHint(page=page_idx),
-                    note=note,
-                ))
-            else:
-                existing.positions.extend(positions)
+            # 同列内の各符号に同じ位置/配筋/断面を割り当てる
+            for mark in col_mark_group:
+                positions = [
+                    PositionRebar(
+                        location=labels[k] if k < len(labels) else "",
+                        top=tops[k] if k < len(tops) else None,
+                        bottom=bots[k] if k < len(bots) else None,
+                        stirrup=sts[k] if k < len(sts) else (sts[-1] if sts else None),
+                    )
+                    for k in range(len(labels))
+                ]
+                existing = next((m for m in members if m.mark == mark), None)
+                if existing is None:
+                    note = _find_note_for_mark(lines, symbol_idx, mark)
+                    members.append(BeamMember(
+                        mark=mark,
+                        section=Section(B=B, D=D),
+                        positions=positions,
+                        concrete_grade=concrete,
+                        rebar_grade_main=main,
+                        rebar_grade_stirrup=stirrup,
+                        source=Source.CALC,
+                        location=LocationHint(page=page_idx),
+                        note=note,
+                    ))
+                else:
+                    existing.positions.extend(positions)
 
 
 def _group_lines(words: list[dict], tol: float = 2.0) -> list[tuple[float, list[dict]]]:
