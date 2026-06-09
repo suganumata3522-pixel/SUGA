@@ -506,91 +506,108 @@ def _group_lines(words: list[dict], tol: float = 2.0) -> list[tuple[float, list[
 def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page_idx: int) -> None:
     """断面計算ブロック（符号 X / 位置 / 断面 / 主筋 / 下 / ST.）から
     各 mark のフィールド単位 bbox を抽出し、当該 mark のメンバに付与する。
+
+    1つの符号行に複数の符号が並ぶ（例: "符号 FB5 FCB1"）場合、各符号は
+    位置数 ÷ 符号数 = per 列ずつを担当する。符号名は自分の列グループの
+    左端（最初の列の上）に置かれるため、符号名の x だけで列を分割すると
+    左側の符号は右の列が枠から切れ、右側の符号は左隣の列まで枠に含めて
+    しまう。これを避けるため、配筋値（主筋上/下/ST.）の実際の列位置を
+    使って各符号の担当列範囲を決める。
     """
     rows = _group_lines(page_words, tol=2.0)
+    # ラベル名 → フィールドキー（None は列構造の取得には使うが bbox キーにしない）
     label_keys = {"位置": None, "断面": "B", "主筋": "top", "下": "bottom", "ST.": "stirrup"}
+    _REBAR_VAL = re.compile(r"^\d+(?:/\d+)?-D\d+(?:@\d+)?$")
 
     for ri, (y, row_words) in enumerate(rows):
         if not row_words or row_words[0]["text"] != "符号":
             continue
-        # マーク列を取得
-        mark_words = [w for w in row_words[1:] if _BEAM_MARK_RE.match(w["text"])]
+        # マーク列を取得（x 昇順）。同一 mark が複数並ぶケースもそのまま列数に数える。
+        mark_words = sorted(
+            [w for w in row_words[1:] if _BEAM_MARK_RE.match(w["text"])],
+            key=lambda w: float(w["x0"]),
+        )
         if not mark_words:
             continue
-        # 同一 mark が 2 個並ぶケース（"B1A B1A"）も含む。
-        # 各 mark のセル x 範囲は隣接 mark との中点。
-        mark_xs = sorted({float(w["x0"]) for w in mark_words})
-        # ラベル行を符号行の直後から収集（次の "符号" or "No." まで）
+        n_marks = len(mark_words)
+
+        # 符号行直後〜次の "符号"/"No."/"断面計算" までを走査し、
+        # 各フィールドの行 y と、配筋値行の値語（列位置）を収集する。
         sub_label_y: dict[str, float] = {}
-        for rj in range(ri + 1, len(rows)):
-            y2, row2 = rows[rj]
-            first = row2[0]["text"]
-            if first in {"符号"} or first.startswith("No.") or first.startswith("断面計算"):
-                break
-            if first in label_keys and label_keys[first]:
-                sub_label_y.setdefault(label_keys[first], y2)
-            if all(k in sub_label_y for k in ("B", "top", "bottom", "stirrup")):
-                break
-
-        if not sub_label_y:
-            continue
-
-        # 左ラベル列(位置/断面/主筋/下/ST. 等)の左端 x
-        label_x_lo = None
+        value_rows: dict[str, list[dict]] = {}  # key -> 値語リスト（x 昇順）
+        label_x_lo: float | None = None
         for rj in range(ri + 1, len(rows)):
             y2, row2 = rows[rj]
             if not row2:
                 continue
-            first = row2[0]
-            if first["text"] in label_keys:
-                lx = float(first["x0"])
-                if label_x_lo is None or lx < label_x_lo:
-                    label_x_lo = lx
-            if first["text"] in {"符号"} or first["text"].startswith("No.") or first["text"].startswith("断面計算"):
+            first = row2[0]["text"]
+            if first == "符号" or first.startswith("No.") or first.startswith("断面計算"):
                 break
+            if first in label_keys:
+                lx = float(row2[0]["x0"])
+                label_x_lo = lx if label_x_lo is None else min(label_x_lo, lx)
+                key = label_keys[first]
+                if key:
+                    sub_label_y.setdefault(key, y2)
+                    if key in ("top", "bottom", "stirrup"):
+                        vals = sorted(
+                            [w for w in row2 if _REBAR_VAL.match(w["text"])],
+                            key=lambda w: float(w["x0"]),
+                        )
+                        if vals:
+                            value_rows.setdefault(key, vals)
+        if not sub_label_y:
+            continue
         if label_x_lo is None:
             label_x_lo = float(row_words[0]["x0"])
 
-        # mark ごとに、このページ内の全カラム x を集約して左右端を決める
-        by_mark: dict[str, list[float]] = {}
-        for mw in mark_words:
-            by_mark.setdefault(mw["text"], []).append(float(mw["x0"]))
-        # 同じ "符号" 行に他 mark のセル境界がある場合は、それを右端制限に使う
-        all_mark_xs = sorted({float(mw["x0"]) for mw in mark_words})
+        # 列位置の決定：配筋値が n_marks の倍数になっている密な行を採用する。
+        cols: list[dict] | None = None
+        for key in ("top", "bottom", "stirrup"):
+            vals = value_rows.get(key)
+            if vals and len(vals) % n_marks == 0 and len(vals) >= n_marks:
+                cols = vals
+                break
+        if cols is None:
+            # 値行から列を取れない場合は符号名 x をフォールバックとして使う
+            cols = mark_words
+        per = max(1, len(cols) // n_marks)
 
         y_top = y - 5
         y_bot = max(sub_label_y.values()) + 18
 
-        # 同一ページで該当 mark のメンバに最初に bbox を付与（既に付与済みならスキップ）
-        for mark_text, xs in by_mark.items():
+        for mi, mw in enumerate(mark_words):
+            mark_text = mw["text"]
             target = next((m for m in members if m.mark == mark_text and not m.field_bboxes), None)
             if target is None:
                 continue
-            xs_sorted = sorted(xs)
-            mark_lo = xs_sorted[0]
-            mark_hi_x = xs_sorted[-1]
-            # この mark の最右カラムの右端：同じ符号行で次の mark との中点、無ければ +135pt
-            others_right = [x for x in all_mark_xs if x > mark_hi_x]
-            if others_right:
-                cell_hi = (mark_hi_x + others_right[0]) / 2
+            grp = cols[mi * per:(mi + 1) * per]
+            if not grp:
+                continue
+            grp_lo = min(float(w["x0"]) for w in grp)
+            grp_hi = max(float(w["x1"]) for w in grp)
+            # 左端：先頭マークはラベル列まで広げて行頭の項目名を含める。
+            # それ以外は左隣グループとの中点で区切る。
+            if mi == 0:
+                x_lo = min(label_x_lo, grp_lo) - 3
             else:
-                cell_hi = mark_hi_x + 135
-            # 左端：同じ符号行で左隣の mark があれば中点で区切る。無ければラベル列まで広げ、
-            # 行頭の項目名（位置/断面/主筋/...）も枠内に入れる。
-            others_left = [x for x in all_mark_xs if x < mark_lo]
-            if others_left:
-                x_lo = (others_left[-1] + mark_lo) / 2 - 3
+                prev = cols[(mi - 1) * per:mi * per]
+                prev_hi = max(float(w["x1"]) for w in prev) if prev else grp_lo - 6
+                x_lo = (prev_hi + grp_lo) / 2
+            # 右端：最終マークはグループ右端 + 余白。それ以外は右隣との中点。
+            if mi == n_marks - 1:
+                x_hi = grp_hi + 6
             else:
-                x_lo = min(label_x_lo, mark_lo) - 3
-            x_hi = cell_hi + 4
+                nxt = cols[(mi + 1) * per:(mi + 2) * per]
+                nxt_lo = min(float(w["x0"]) for w in nxt) if nxt else grp_hi + 12
+                x_hi = (grp_hi + nxt_lo) / 2
 
             field_bboxes: dict[str, tuple[float, float, float, float]] = {}
             for key, ly in sub_label_y.items():
-                # 各フィールド枠も左ラベル〜全カラムを横に含める（行頭の項目名と
-                # 値が同時に見えるように）。縦はその行のみ。
                 field_bboxes[key] = (x_lo, ly - 4, x_hi, ly + 12)
             target.field_bboxes = field_bboxes
             target.location = LocationHint(page=page_idx, bbox=(x_lo, y_top, x_hi, y_bot))
+
 
 
 # 後方互換用
