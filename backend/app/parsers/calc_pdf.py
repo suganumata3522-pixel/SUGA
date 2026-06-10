@@ -258,6 +258,7 @@ class StructureSuitePdfParser(Parser):
                     self._emit_ss7_beam(
                         members, ss7m.group(1), lines, i, page_idx,
                         cur_concrete, cur_main, cur_stirrup,
+                        page_words,
                     )
                     i += 1
                     continue
@@ -273,6 +274,7 @@ class StructureSuitePdfParser(Parser):
     def _emit_ss7_beam(
         members: list[BeamMember], mark: str, lines: list[str], idx: int, page_idx: int,
         concrete: str | None, main: str | None, stirrup: str | None,
+        page_words: list[dict] | None = None,
     ) -> None:
         """SS7形式の小梁1ブロックを抽出して BeamMember を作る。
 
@@ -334,6 +336,11 @@ class StructureSuitePdfParser(Parser):
             PositionRebar(location="中央", top=tc, bottom=bc, stirrup=stp_str),
             PositionRebar(location="右端", top=tr, bottom=br, stirrup=stp_str),
         ]
+
+        # bbox / field_bboxes をページ語彙から計算
+        bbox, field_bboxes = StructureSuitePdfParser._ss7_block_bboxes(
+            page_words, mark, lines, idx)
+
         members.append(BeamMember(
             mark=mark,
             section=Section(B=B, D=D),
@@ -342,9 +349,101 @@ class StructureSuitePdfParser(Parser):
             rebar_grade_main=main,
             rebar_grade_stirrup=stirrup,
             source=Source.CALC,
-            location=LocationHint(page=page_idx),
+            location=LocationHint(page=page_idx, bbox=bbox),
+            field_bboxes=field_bboxes,
             note=None,
         ))
+
+    @staticmethod
+    def _ss7_block_bboxes(
+        page_words: list[dict] | None, mark: str, lines: list[str], idx: int,
+    ) -> tuple[tuple[float, float, float, float] | None, dict[str, tuple[float, float, float, float]]]:
+        """SS7 形式の1符号ブロック (3行構成) の bbox と field_bboxes を返す。
+
+        SS7 では1符号が3行で構成される:
+          行 0 (idx): [ MARK ] [floor X Y X Y] 方向 X 上端 ...
+          行 1 (idx+1): 二重上 1次=1 反転 ... 下端 ... @ピッチ
+          行 2 (idx+2): B×D NNN×NNN ...
+
+        page_words から行 0/1/2 のテキストで該当する語のみを集めて
+        各行 y を特定し、それらを覆う矩形を返す。"""
+        if not page_words:
+            return None, {}
+        # 行 0 の特定: "[" + MARK + "]" の3語が同じ y にあるはず
+        mark_anchors: list[dict] = []
+        for k, w in enumerate(page_words):
+            if w["text"] != mark:
+                continue
+            # 直前語が "[" で直後語が "]" か確認
+            if k - 1 >= 0 and k + 1 < len(page_words):
+                prv = page_words[k - 1]
+                nxt = page_words[k + 1]
+                same_y = (abs(float(prv["top"]) - float(w["top"])) <= 3
+                          and abs(float(nxt["top"]) - float(w["top"])) <= 3)
+                if same_y and prv["text"] == "[" and nxt["text"] == "]":
+                    mark_anchors.append(w)
+        if not mark_anchors:
+            return None, {}
+        # 該当ブロックは複数同名符号があれば最初の登場ブロックを使う
+        anchor = mark_anchors[0]
+        y0 = float(anchor["top"])
+
+        def _row_words(y: float, tol: float = 4.0) -> list[dict]:
+            return [w for w in page_words if abs(float(w["top"]) - y) <= tol]
+
+        row0 = _row_words(y0)
+        if not row0:
+            return None, {}
+        x_min0 = min(float(w["x0"]) for w in row0)
+        x_max0 = max(float(w["x1"]) for w in row0)
+
+        # 行 1 と 行 2 を探す:
+        # 行 0 から下方向で 5pt〜30pt 程度離れた次の行を 行 1、その下を 行 2 とする。
+        all_y = sorted({round(float(w["top"]) * 2) / 2 for w in page_words
+                        if 0 < float(w["top"]) - y0 < 35})
+        row1_y = next((y for y in all_y if 4 <= y - y0 <= 12), None)
+        row2_y = next((y for y in all_y if 11 <= y - y0 <= 22), None)
+        if row2_y is None and row1_y is not None:
+            row2_y = next((y for y in all_y if y - row1_y > 4), None)
+
+        # 各行で「下端」「B×D」が含まれるかで実体識別を補強
+        rows_y = [y0]
+        rows_x = [(x_min0, x_max0)]
+        for ry in (row1_y, row2_y):
+            if ry is None:
+                continue
+            ws = _row_words(ry)
+            if not ws:
+                continue
+            xs = [float(w["x0"]) for w in ws] + [float(w["x1"]) for w in ws]
+            rows_y.append(ry)
+            rows_x.append((min(float(w["x0"]) for w in ws), max(float(w["x1"]) for w in ws)))
+
+        if len(rows_y) < 2:
+            return None, {}
+
+        # 行 1 (下端) と 行 2 (B×D) は同じブロックなので、各行の x 範囲は
+        # 行 0 の x 範囲とおおむね同じ。安定化のため行 0 の幅を採用する。
+        x_lo = x_min0 - 2
+        x_hi = x_max0 + 2
+        y_top = y0 - 3
+        y_bot = max(rows_y) + 12
+
+        bbox = (x_lo, y_top, x_hi, y_bot)
+
+        # field_bboxes: 各フィールドを行単位で割り当て
+        #   B   → 行2 (B×D)
+        #   top → 行0 (上端)
+        #   bottom, stirrup → 行1 (下端 / @ピッチ)
+        field_bboxes: dict[str, tuple[float, float, float, float]] = {
+            "top": (x_lo, rows_y[0] - 3, x_hi, rows_y[0] + 10),
+        }
+        if len(rows_y) >= 2:
+            field_bboxes["bottom"] = (x_lo, rows_y[1] - 3, x_hi, rows_y[1] + 10)
+            field_bboxes["stirrup"] = field_bboxes["bottom"]
+        if len(rows_y) >= 3:
+            field_bboxes["B"] = (x_lo, rows_y[2] - 3, x_hi, rows_y[2] + 10)
+        return bbox, field_bboxes
 
     @staticmethod
     def _read_section_table(lines: list[str], symbol_idx: int) -> tuple[list[str], list[str], list[str], list[tuple[int, int]]]:
