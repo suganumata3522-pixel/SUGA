@@ -66,6 +66,67 @@ def _aggregate_rebar(m: BeamMember, attr: str) -> set[str]:
     return out
 
 
+# 配筋トークン "a/b-Dsize@pitch" のパース用。a=1段筋本数, b=2段筋本数。
+_REBAR_PARSE_RE = re.compile(r"^(\d+)(?:/(\d+))?-D(\d+)(?:@(\d+))?$")
+
+
+def _parse_rebar(v: str) -> tuple[int, int, int, int | None] | None:
+    """配筋値を (1段筋本数, 2段筋本数, 径, ピッチ) に分解する。
+    例: "4/2-D22" → (4, 2, 22, None) / "2-D13@200" → (2, 0, 13, 200)。
+    解析できなければ None。
+    """
+    m = _REBAR_PARSE_RE.match(v.replace(" ", ""))
+    if not m:
+        return None
+    main = int(m.group(1))
+    second = int(m.group(2)) if m.group(2) else 0
+    size = int(m.group(3))
+    pitch = int(m.group(4)) if m.group(4) else None
+    return (main, second, size, pitch)
+
+
+def _rebar_envelope_covers(draw_val: str, calc_set: set[str]) -> bool:
+    """構造図の単一「全断面」値が計算書の各位置値を「包絡」しているか。
+
+    梁リストでは断面が全長一定の梁を「全断面」1値で表すが、計算書は
+    通り芯ごとに位置別の配筋を出力する。両端で 2 段筋本数が異なる
+    （例: 計算書が 4/1-D22 と 4/2-D22 を出力）場合、構造図は安全側に
+    最大値（4/2-D22）を全断面値として記載する。これは設計上整合して
+    いるため不一致としない。
+
+    判定: 構造図値と各計算書値が「同じ径・同じピッチ・同じ1段筋本数」
+    で、構造図の2段筋本数が計算書値以上（包絡）であること。1つでも
+    構造図が下回る（=配筋不足）位置があれば False（実不整合として検出）。
+    """
+    dv = _parse_rebar(draw_val)
+    if dv is None or not calc_set:
+        return False
+    d_main, d_second, d_size, d_pitch = dv
+    for cv_str in calc_set:
+        cv = _parse_rebar(cv_str)
+        if cv is None:
+            return False
+        c_main, c_second, c_size, c_pitch = cv
+        if c_size != d_size or c_pitch != d_pitch or c_main != d_main:
+            return False
+        if d_second < c_second:
+            return False
+    return True
+
+
+def _rebar_field_consistent(draw_set: set[str], calc_set: set[str]) -> bool:
+    """構造図と計算書の配筋集合が整合しているか。
+
+    完全一致のほか、構造図が単一「全断面」値で計算書の位置別値を
+    包絡している場合も整合とみなす（_rebar_envelope_covers 参照）。
+    """
+    if draw_set == calc_set:
+        return True
+    if len(draw_set) == 1:
+        return _rebar_envelope_covers(next(iter(draw_set)), calc_set)
+    return False
+
+
 def _drawing_loc(d: BeamMember | None) -> Locator | None:
     if d is None or d.location is None:
         return None
@@ -160,7 +221,7 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
         for attr, label in [("top", "上端筋"), ("bottom", "下端筋"), ("stirrup", "STP"), ("web", "腹筋")]:
             ds = _aggregate_rebar(d, attr)
             cs = _aggregate_rebar(c, attr)
-            if ds and cs and ds != cs:
+            if ds and cs and not _rebar_field_consistent(ds, cs):
                 rebar_fields.append(FieldDiff(
                     field=label,
                     drawing_value=" / ".join(sorted(ds)),
