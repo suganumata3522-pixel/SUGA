@@ -114,19 +114,6 @@ def _rebar_envelope_covers(draw_val: str, calc_set: set[str]) -> bool:
     return True
 
 
-def _rebar_field_consistent(draw_set: set[str], calc_set: set[str]) -> bool:
-    """構造図と計算書の配筋集合が整合しているか。
-
-    完全一致のほか、構造図が単一「全断面」値で計算書の位置別値を
-    包絡している場合も整合とみなす（_rebar_envelope_covers 参照）。
-    """
-    if draw_set == calc_set:
-        return True
-    if len(draw_set) == 1:
-        return _rebar_envelope_covers(next(iter(draw_set)), calc_set)
-    return False
-
-
 def _drawing_loc(d: BeamMember | None) -> Locator | None:
     if d is None or d.location is None:
         return None
@@ -217,40 +204,62 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
                 drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
             ))
         # 配筋比較
-        rebar_fields: list[FieldDiff] = []
+        # 各フィールドを以下の3カテゴリに分類:
+        #  ・mismatch: 構造図と計算書が一致せず、構造図が計算書を包絡もしない
+        #              （配筋不足の可能性あり → 配筋不一致）
+        #  ・envelope: 完全一致ではないが、構造図の単一全断面値が計算書の
+        #              各位置値を安全側に包絡している。計算書には複数バリアント
+        #              があるため、図面で漏れていないかを目視確認すべき。
+        rebar_mismatch_fields: list[FieldDiff] = []
+        rebar_envelope_fields: list[FieldDiff] = []
         for attr, label in [("top", "上端筋"), ("bottom", "下端筋"), ("stirrup", "STP"), ("web", "腹筋")]:
             ds = _aggregate_rebar(d, attr)
             cs = _aggregate_rebar(c, attr)
-            if ds and cs and not _rebar_field_consistent(ds, cs):
-                rebar_fields.append(FieldDiff(
-                    field=label,
-                    drawing_value=" / ".join(sorted(ds)),
-                    calc_value=" / ".join(sorted(cs)),
-                    drawing_loc=_field_loc(d, attr),
-                    calc_loc=_field_loc(c, attr),
-                ))
+            if not (ds and cs) or ds == cs:
+                continue
+            field = FieldDiff(
+                field=label,
+                drawing_value=" / ".join(sorted(ds)),
+                calc_value=" / ".join(sorted(cs)),
+                drawing_loc=_field_loc(d, attr),
+                calc_loc=_field_loc(c, attr),
+            )
+            if len(ds) == 1 and _rebar_envelope_covers(next(iter(ds)), cs):
+                rebar_envelope_fields.append(field)
+            else:
+                rebar_mismatch_fields.append(field)
+        rebar_fields = rebar_mismatch_fields + rebar_envelope_fields
         # 次のいずれかは「要目視確認」として出す（配筋不一致と紛らわしい
         # false positive を避ける）:
         #  ・構造図側の抽出が不完全だと分かっている場合
         #  ・連梁（通り芯ごとに配筋が異なり自動照合が難しい）の場合
+        #  ・構造図が単一全断面値で計算書の複数バリアントを包絡している場合
+        #    （配筋自体は安全側だが計算書には複数の断面があるため要確認）
         # 計算書側は全小梁を通り芯ごとの位置で持つため判定に使えない。
         # 構造図の位置ラベルが通り芯で枝分かれしているかで連梁を判定する。
         continuous = _is_continuous_beam(d)
-        if d.needs_review or continuous:
+        envelope_only = bool(rebar_envelope_fields) and not rebar_mismatch_fields
+        if d.needs_review or continuous or envelope_only:
             parts = [c.note or ""]
             if d.review_note:
                 parts.append(d.review_note)
             if continuous:
                 parts.append("連梁（通り芯により配筋が異なる）のため目視確認が必要")
+            if envelope_only:
+                parts.append(
+                    "構造図は全断面1値で記載されているが計算書では位置により"
+                    "配筋が異なります（構造図は安全側の包絡値）。"
+                    "計算書の全配筋仕様を確認してください。"
+                )
             note_text = " | ".join(p for p in parts if p)
             diffs.append(Diff(
                 kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
                 note=note_text,
                 drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
             ))
-        elif rebar_fields:
+        elif rebar_mismatch_fields:
             diffs.append(Diff(
-                kind=DiffKind.REBAR_MISMATCH, mark=mark, fields=rebar_fields, note=c.note,
+                kind=DiffKind.REBAR_MISMATCH, mark=mark, fields=rebar_mismatch_fields, note=c.note,
                 drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
             ))
         # 不整合が1件も出なければ「一致」
