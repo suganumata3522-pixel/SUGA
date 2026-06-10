@@ -135,6 +135,16 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
             continue
         c = c_map[mark]
         before = len(diffs)
+        # 構造図側で「欠番」となっている符号: 図面上で意図的に削除/欠番扱い
+        # された符号。計算書側にデータが残っている場合、図面と計算書が
+        # 食い違っているため目視確認が必要。
+        if d.note == "欠番" and (c.section.B is not None or c.positions):
+            diffs.append(Diff(
+                kind=DiffKind.NEEDS_REVIEW, mark=mark,
+                note="構造図では欠番符号だが計算書には配筋データがあります",
+                drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
+            ))
+            continue
         # B 比較（両方に値がある場合のみ）
         if d.section.B is not None and c.section.B is not None and d.section.B != c.section.B:
             diffs.append(Diff(

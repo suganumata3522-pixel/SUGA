@@ -380,20 +380,60 @@ class DrawingPdfParser(Parser):
                 bounds = new_bounds
             mark_words_sorted = sorted(mark_words, key=lambda w: float(w["x0"]))
 
-            # 位置ラベルをマークへ DP 割り当て（連続区間）
+            # 「欠番」マークの検出: 各符号の列範囲内に "欠番" の語があれば
+            # その符号は実体を持たない欠番符号として扱い、位置ラベルや断面
+            # データの割り当て対象から除外する。
+            # 欠番符号は BeamMember として残すが note="欠番" を付与し、
+            # 配筋・断面は空にする。
+            ketsuban_marks: set[int] = set()
+            for mi, ((x_lo, x_hi), mw) in enumerate(zip(bounds, mark_words_sorted)):
+                for w in words:
+                    if w["text"] != "欠番":
+                        continue
+                    wx = float(w["x0"])
+                    wy = float(w["top"])
+                    if x_lo <= wx <= x_hi and (y_top - 2) <= wy <= (y_bot - 5):
+                        ketsuban_marks.add(mi)
+                        break
+
+            # 位置ラベルをマークへ DP 割り当て（連続区間）。欠番符号は除外。
             pos_y = grp.get("位置")
             pos_labels = (
                 _collect_pos_labels(words, pos_y, label_x0 + 30, right_limit)
                 if pos_y is not None else []
             )
-            partition = (
-                _partition_labels(pos_labels, mark_xs_sorted)
-                if pos_labels else None
+            active_mark_indices = [mi for mi in range(len(mark_words_sorted)) if mi not in ketsuban_marks]
+            active_mark_xs = [float(mark_words_sorted[mi]["x0"]) for mi in active_mark_indices]
+            partition_active = (
+                _partition_labels(pos_labels, active_mark_xs)
+                if pos_labels and active_mark_xs else None
             )
+            # active 用 partition を全 mark 用 partition に展開（欠番マークは空）
+            if partition_active is not None:
+                partition: list[list[int]] | None = [[] for _ in range(len(mark_words_sorted))]
+                for ai, mi in enumerate(active_mark_indices):
+                    partition[mi] = partition_active[ai]
+            else:
+                partition = None
 
             # 各 mark ごとに位置・配筋などを拾う
             for mi, ((x_lo, x_hi), mw) in enumerate(zip(bounds, mark_words_sorted)):
                 mark_x = float(mw["x0"])
+                if mi in ketsuban_marks:
+                    # 欠番符号: 位置・配筋・断面なし。BeamMember として残し note="欠番"。
+                    out.append(BeamMember(
+                        mark=mw["text"],
+                        section=Section(B=None, D=None),
+                        positions=[],
+                        fc_code=None,
+                        source=self.source,
+                        location=LocationHint(page=page_idx, bbox=(x_lo, y_top - 5, x_hi, y_bot - 2)),
+                        field_bboxes={},
+                        needs_review=False,
+                        review_note="欠番",
+                        note="欠番",
+                    ))
+                    continue
                 if partition is not None:
                     my_labels = [pos_labels[idx] for idx in partition[mi]]
                     positions = self._extract_mark_positions(words, grp, my_labels)
