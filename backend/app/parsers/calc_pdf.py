@@ -283,9 +283,9 @@ class StructureSuitePdfParser(Parser):
              二重上 1次=1                       反転 無 下端 4-D25 4/2-D25 4-D25 @200 MA ...
           B×D 500×1850 単スパン  φI 1.000 L 8500 dt 83 83/105 83 ...
         """
-        # 同じ符号で既に登録があればスキップ（最初の登場ブロックを採用）
-        if any(m.mark == mark for m in members):
-            return
+        # 同じ符号が既に登録されていれば、後続ブロックの位置情報のみ追加する。
+        # これにより別 検討 ブロックも整合照合の対象に入る。
+        existing = next((m for m in members if m.mark == mark), None)
         # 後続4行までスキャンして 上端/下端/B×D を拾う
         top_str = bottom_str = None
         stp_str = None
@@ -340,6 +340,12 @@ class StructureSuitePdfParser(Parser):
         # bbox / field_bboxes をページ語彙から計算
         bbox, field_bboxes = StructureSuitePdfParser._ss7_block_bboxes(
             page_words, mark, lines, idx)
+
+        if existing is not None:
+            existing.positions.extend(positions)
+            existing.extra_locations.append(LocationHint(page=page_idx, bbox=bbox))
+            existing.extra_sections.append(Section(B=B, D=D))
+            return
 
         members.append(BeamMember(
             mark=mark,
@@ -579,6 +585,9 @@ class StructureSuitePdfParser(Parser):
                     ))
                 else:
                     existing.positions.extend(positions)
+                    # 別 検討 ブロックの位置情報と断面寸法を追加
+                    existing.extra_locations.append(LocationHint(page=page_idx))
+                    existing.extra_sections.append(Section(B=B, D=D))
 
 
 def _group_lines(words: list[dict], tol: float = 2.0) -> list[tuple[float, list[dict]]]:

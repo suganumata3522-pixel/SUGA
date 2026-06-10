@@ -50,6 +50,11 @@ class BeamMember(BaseModel):
     rebar_grade_stirrup: Optional[str] = None  # 例 "SD295"
     source: Source
     location: Optional[LocationHint] = None
+    # 同一符号が計算書内の別 検討 ブロックにも登場する場合、追加の
+    # 位置情報と各 検討 の断面寸法をここに保持する。
+    # extra_locations[i] と extra_sections[i] は対応する。
+    extra_locations: list[LocationHint] = Field(default_factory=list)
+    extra_sections: list[Section] = Field(default_factory=list)
     # フィールド単位のハイライト用 bbox。キー: "B" / "top" / "bottom" / "stirrup" / "web"
     # 値: (x0, y0, x1, y1) 表示座標 (pdfplumber 互換)
     field_bboxes: dict[str, tuple[float, float, float, float]] = Field(default_factory=dict)

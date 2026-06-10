@@ -239,7 +239,19 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
         # 構造図の位置ラベルが通り芯で枝分かれしているかで連梁を判定する。
         continuous = _is_continuous_beam(d)
         envelope_only = bool(rebar_envelope_fields) and not rebar_mismatch_fields
-        if d.needs_review or continuous or envelope_only:
+
+        # 同符号で計算書内に複数の 検討 ブロックが存在するかを判定
+        multi_study = bool(c.extra_locations)
+        multi_section = False
+        if multi_study:
+            all_sections = [c.section] + list(c.extra_sections)
+            distinct_sections = {
+                (s.B, s.D) for s in all_sections
+                if s.B is not None or s.D is not None
+            }
+            multi_section = len(distinct_sections) >= 2
+
+        if d.needs_review or continuous or envelope_only or multi_study:
             parts = [c.note or ""]
             if d.review_note:
                 parts.append(d.review_note)
@@ -251,6 +263,20 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
                     "配筋が異なります（構造図は安全側の包絡値）。"
                     "計算書の全配筋仕様を確認してください。"
                 )
+            if multi_study:
+                pages = [c.location.page] if c.location else []
+                pages += [loc.page for loc in c.extra_locations]
+                page_str = "/".join(f"p{p}" for p in pages)
+                if multi_section:
+                    parts.append(
+                        f"計算書に同符号で複数断面の検討あり ({page_str})。"
+                        "各検討の断面寸法・配筋を計算書側で確認してください。"
+                    )
+                else:
+                    parts.append(
+                        f"計算書に同符号で複数の検討あり ({page_str})。"
+                        "各検討の配筋仕様を確認してください。"
+                    )
             note_text = " | ".join(p for p in parts if p)
             diffs.append(Diff(
                 kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
