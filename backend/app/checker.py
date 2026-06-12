@@ -240,8 +240,26 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
         continuous = _is_continuous_beam(d)
         envelope_only = bool(rebar_envelope_fields) and not rebar_mismatch_fields
 
-        # 同符号で計算書内に複数の 検討 ブロックが存在するかを判定
-        multi_study = bool(c.extra_locations)
+        # 同符号で計算書内に複数の 検討 ブロックが存在するかを判定。
+        # ユーザー仕様:
+        #  ・各 検討 が「全断面均一（同一検討内の全位置で同じ配筋）」かつ
+        #    全 検討 間で同じ値 → 通常の照合（一致 or 配筋不一致）に従う
+        #  ・各 検討 が均一でも 検討 間で値が違う → 配筋不一致 (rebar_mismatch_fields に既に反映)
+        #  ・どれか1つでも 検討 内で位置別に値が違う（B1A のように端部/中央 異）
+        #    → 要目視確認
+        multi_study = len(c.studies) >= 2
+        any_study_nonuniform = False
+        if c.studies:
+            for study in c.studies:
+                for attr in ("top", "bottom", "stirrup", "web"):
+                    vals = {getattr(p, attr).replace(" ", "")
+                            for p in study if getattr(p, attr)}
+                    if len(vals) >= 2:
+                        any_study_nonuniform = True
+                        break
+                if any_study_nonuniform:
+                    break
+
         multi_section = False
         if multi_study:
             all_sections = [c.section] + list(c.extra_sections)
@@ -251,7 +269,18 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
             }
             multi_section = len(distinct_sections) >= 2
 
-        if d.needs_review or continuous or envelope_only or multi_study:
+        # 要目視確認を発出するケース:
+        #  ・構造図側で抽出不確実 or 連梁
+        #  ・図面 全断面1値が計算書の複数バリアントを包絡
+        #  ・計算書の同符号 検討 内で位置別に配筋が異なる (B1A ケース)
+        #  ・計算書の同符号で 断面寸法 が異なる検討あり (構造的に別断面)
+        needs_review = (
+            d.needs_review or continuous or envelope_only
+            or (multi_study and any_study_nonuniform)
+            or multi_section
+        )
+
+        if needs_review:
             parts = [c.note or ""]
             if d.review_note:
                 parts.append(d.review_note)
@@ -263,20 +292,22 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
                     "配筋が異なります（構造図は安全側の包絡値）。"
                     "計算書の全配筋仕様を確認してください。"
                 )
-            if multi_study:
+            if multi_section:
                 pages = [c.location.page] if c.location else []
                 pages += [loc.page for loc in c.extra_locations]
                 page_str = "/".join(f"p{p}" for p in pages)
-                if multi_section:
-                    parts.append(
-                        f"計算書に同符号で複数断面の検討あり ({page_str})。"
-                        "各検討の断面寸法・配筋を計算書側で確認してください。"
-                    )
-                else:
-                    parts.append(
-                        f"計算書に同符号で複数の検討あり ({page_str})。"
-                        "各検討の配筋仕様を確認してください。"
-                    )
+                parts.append(
+                    f"計算書に同符号で複数断面の検討あり ({page_str})。"
+                    "各検討の断面寸法・配筋を計算書側で確認してください。"
+                )
+            elif multi_study and any_study_nonuniform:
+                pages = [c.location.page] if c.location else []
+                pages += [loc.page for loc in c.extra_locations]
+                page_str = "/".join(f"p{p}" for p in pages)
+                parts.append(
+                    f"計算書に同符号で複数の検討あり ({page_str})。"
+                    "梁端部・中央等で配筋が異なるため目視確認が必要です。"
+                )
             note_text = " | ".join(p for p in parts if p)
             diffs.append(Diff(
                 kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,

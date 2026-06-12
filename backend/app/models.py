@@ -55,6 +55,11 @@ class BeamMember(BaseModel):
     # extra_locations[i] と extra_sections[i] は対応する。
     extra_locations: list[LocationHint] = Field(default_factory=list)
     extra_sections: list[Section] = Field(default_factory=list)
+    # 検討単位の位置リスト。studies[i] が i 番目の 検討 のポジション群。
+    # 整合判定で「全断面（検討内が均一）か」「検討間で値が違うか」を
+    # 区別するために使用する。positions と内容は重複する（互換用）が、
+    # 検討単位の境界を保つために独立して保持する。
+    studies: list[list[PositionRebar]] = Field(default_factory=list)
     # フィールド単位のハイライト用 bbox。キー: "B" / "top" / "bottom" / "stirrup" / "web"
     # 値: (x0, y0, x1, y1) 表示座標 (pdfplumber 互換)
     field_bboxes: dict[str, tuple[float, float, float, float]] = Field(default_factory=dict)

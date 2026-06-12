@@ -343,6 +343,7 @@ class StructureSuitePdfParser(Parser):
 
         if existing is not None:
             existing.positions.extend(positions)
+            existing.studies.append(list(positions))
             existing.extra_locations.append(LocationHint(page=page_idx, bbox=bbox))
             existing.extra_sections.append(Section(B=B, D=D))
             return
@@ -351,6 +352,7 @@ class StructureSuitePdfParser(Parser):
             mark=mark,
             section=Section(B=B, D=D),
             positions=positions,
+            studies=[list(positions)],
             concrete_grade=concrete,
             rebar_grade_main=main,
             rebar_grade_stirrup=stirrup,
@@ -576,6 +578,7 @@ class StructureSuitePdfParser(Parser):
                         mark=mark,
                         section=Section(B=B, D=D),
                         positions=positions,
+                        studies=[list(positions)],
                         concrete_grade=concrete,
                         rebar_grade_main=main,
                         rebar_grade_stirrup=stirrup,
@@ -585,6 +588,7 @@ class StructureSuitePdfParser(Parser):
                     ))
                 else:
                     existing.positions.extend(positions)
+                    existing.studies.append(list(positions))
                     # 別 検討 ブロックの位置情報と断面寸法を追加
                     existing.extra_locations.append(LocationHint(page=page_idx))
                     existing.extra_sections.append(Section(B=B, D=D))
