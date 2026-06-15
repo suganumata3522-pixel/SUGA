@@ -27,9 +27,11 @@ class ProductInfo(TypedDict):
 _REGISTRY: dict[ProductKind, ProductInfo] = {
     "core": {
         "kind": "core",
-        "name": "YHG",
-        "subtitle": "構造図・計算書 整合チェックツール（RC小梁・スラブ）",
-        "fastapi_title": "YHG - 構造図/計算書整合チェック",
+        # 画面表示名。exe 名・データフォルダ名とは独立（exe 名は
+        # yhg.spec の name=、データフォルダ名は data_dirname で別管理）。
+        "name": "構造図・計算書 整合チェックツール（RC小梁・スラブ）",
+        "subtitle": "",
+        "fastapi_title": "構造図・計算書 整合チェック",
         "data_dirname": "YHG-data",
         "port": 8000,
         "mode": "active",

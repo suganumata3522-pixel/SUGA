@@ -25,7 +25,7 @@ def _open_browser() -> None:
 
 def main() -> None:
     print("=" * 56)
-    print("  YHG - 構造図/計算書 整合チェック")
+    print("  構造図・計算書 整合チェックツール（RC小梁・スラブ）")
     print(f"  起動中... ブラウザで {URL} を開きます")
     print("  終了するにはこのウィンドウを閉じてください")
     print("=" * 56)

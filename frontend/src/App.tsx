@@ -162,8 +162,8 @@ export default function App() {
   return (
     <div className="container">
       <header className="app-header">
-        <div className="app-title">{product?.name ?? "YHG"}</div>
-        <div className="app-subtitle">{product?.subtitle ?? "構造図・計算書 整合チェックツール（RC小梁・スラブ）"}</div>
+        <div className="app-title">{product?.name ?? "構造図・計算書 整合チェックツール（RC小梁・スラブ）"}</div>
+        {product?.subtitle ? <div className="app-subtitle">{product.subtitle}</div> : null}
       </header>
 
       {isStub ? (

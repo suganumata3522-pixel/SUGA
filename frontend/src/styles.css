@@ -23,9 +23,9 @@ h2 { font-size: 16px; margin: 4px 0 8px; display: flex; align-items: center; gap
   margin-bottom: 16px;
 }
 .app-title {
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 800;
-  letter-spacing: 2px;
+  letter-spacing: 1px;
   color: #2563eb;
 }
 .app-subtitle { font-size: 14px; color: #4b5563; }
