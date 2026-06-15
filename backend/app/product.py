@@ -1,7 +1,7 @@
 """製品ごとの設定。
 
-`YHG.exe` (core) と `YHG-Sleeve.exe` (sleeve) は同じコードベースを共有し、
-起動時に環境変数 `YHG_PRODUCT` を見て挙動を切り替える。
+`整合チェックツール.exe` (core) と `YHG-Sleeve.exe` (sleeve) は同じ
+コードベースを共有し、起動時に環境変数 `YHG_PRODUCT` を見て挙動を切り替える。
 
 各エントリポイント (run.py / run_sleeve.py) が import 前に `YHG_PRODUCT` を
 セットする想定。
@@ -32,7 +32,7 @@ _REGISTRY: dict[ProductKind, ProductInfo] = {
         "name": "構造図・計算書 整合チェックツール（RC小梁・スラブ）",
         "subtitle": "",
         "fastapi_title": "構造図・計算書 整合チェック",
-        "data_dirname": "YHG-data",
+        "data_dirname": "整合チェックツール-data",
         "port": 8000,
         "mode": "active",
     },

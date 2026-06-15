@@ -19,11 +19,28 @@ def _app_dir() -> Path:
     """ユーザーデータ（アップロード）を置く基準ディレクトリ。
 
     - .exe 実行時: 実行ファイルと同じ場所に <製品名>-data/ を作る
-      (YHG.exe → YHG-data/, YHG-Sleeve.exe → YHG-Sleeve-data/)
+      (整合チェックツール.exe → 整合チェックツール-data/,
+       YHG-Sleeve.exe → YHG-Sleeve-data/)
     - 通常実行時: カレントディレクトリ
+
+    旧称データフォルダ ("YHG-data") が既に存在し、新称フォルダが
+    まだ無い場合は、そのまま新名にリネームして履歴を引き継ぐ。
     """
     if _is_frozen():
-        return Path(sys.executable).parent / _current_product()["data_dirname"]
+        parent = Path(sys.executable).parent
+        info = _current_product()
+        new_dir = parent / info["data_dirname"]
+        # 旧称データフォルダからの移行（破壊しない条件で）
+        if not new_dir.exists():
+            legacy = parent / ("YHG-data" if info["kind"] == "core"
+                               else "YHG-Sleeve-data")
+            if legacy.exists() and legacy != new_dir:
+                try:
+                    legacy.rename(new_dir)
+                except OSError:
+                    # リネーム失敗時は新フォルダを通常通り作成（履歴は引き継がれない）
+                    pass
+        return new_dir
     return Path(os.environ.get("YHG_DATA_DIR", "."))
 
 
