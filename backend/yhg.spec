@@ -1,5 +1,5 @@
 # PyInstaller スペックファイル（本体）。
-# Windows 上で  pyinstaller yhg.spec  を実行すると dist/整合チェックツール.exe が生成される。
+# Windows 上で  pyinstaller yhg.spec  を実行すると dist/整合チェックツール(RC小梁・スラブ).exe が生成される。
 # ビルド前に scripts/build_frontend.sh 等でフロントを backend/app/static に
 # 配置しておくこと。
 # ruff: noqa
@@ -44,7 +44,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name="整合チェックツール",
+    name="整合チェックツール(RC小梁・スラブ)",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

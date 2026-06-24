@@ -1,6 +1,6 @@
 """製品ごとの設定。
 
-`整合チェックツール.exe` (core) と `YHG-Sleeve.exe` (sleeve) は同じ
+`整合チェックツール(RC小梁・スラブ).exe` (core) と `YHG-Sleeve.exe` (sleeve) は同じ
 コードベースを共有し、起動時に環境変数 `YHG_PRODUCT` を見て挙動を切り替える。
 
 各エントリポイント (run.py / run_sleeve.py) が import 前に `YHG_PRODUCT` を
