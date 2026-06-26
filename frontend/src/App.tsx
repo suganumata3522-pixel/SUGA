@@ -229,7 +229,7 @@ export default function App() {
           <div className="card-h2-row">
             <h2><span className="badge">2</span>整合チェック結果 — 小梁</h2>
             <div className="report-controls">
-              <label className="kind-check" title="OFF にすると種別フィルタ・部材除外を無視し、全差分を出力します">
+              <label className="kind-check" title="ON: 表示中の項目のみ出力 / OFF: フィルタを無視し全差分（一致も含む）を出力">
                 <input type="checkbox" checked={reportFiltered}
                        onChange={(e) => setReportFiltered(e.target.checked)} />
                 表示中の項目のみ出力
