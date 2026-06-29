@@ -289,6 +289,50 @@ _RE_T_CM = re.compile(r"ｔ\s*=\s*(\d+)\s*\(cm\)")
 # プライム文字は ASCII ' / 右シングルクォート ’ / プライム ′ を許容。
 _RE_PRIME_BLOCK = re.compile(r"^\s*[\(（]\s*\d+\s*['’′]\s*[\)）]")
 
+# 異形鉄筋の公称断面積 (mm²)。補足検討の配筋が主検討に覆われているか
+# （= 図面の主検討配筋で安全側か）を面積で比較するために使う。
+_BAR_AREA = {
+    10: 71.33, 13: 126.7, 16: 198.6, 19: 286.5, 22: 387.1, 25: 506.7,
+    29: 642.4, 32: 794.2, 35: 956.6, 38: 1140.4, 41: 1340.0,
+}
+
+
+def _parse_slab_rebar(token: str) -> tuple[float, int] | None:
+    """スラブ配筋トークンを (本数換算の合計断面積, ピッチ) に分解する。
+    例: "D16@125" → (198.6, 125) / "D10D13@200" → (198.0, 200)。
+    解析できなければ None。
+    """
+    m = re.match(r"^((?:D\d+)+)@(\d+)$", token.replace(" ", ""))
+    if not m:
+        return None
+    bars = [int(b) for b in re.findall(r"D(\d+)", m.group(1))]
+    area = sum(_BAR_AREA.get(b, 0.0) for b in bars)
+    return (area, int(m.group(2)))
+
+
+def _rebar_covered(value: str, main_values: list[str]) -> bool:
+    """補足検討の配筋値 value が、主検討の配筋群 main_values に覆われているか。
+
+    同一ピッチで主検討の合計断面積が補足検討以上であれば「覆われている」
+    （= 図面の主検討配筋で安全側）とみなす。文字列が完全一致する場合も
+    覆われているとする。解析不能なトークンは安全側に倒して True（フラグ
+    しない）扱いとする。
+    """
+    if value in main_values:
+        return True
+    s = _parse_slab_rebar(value)
+    if s is None:
+        return True
+    s_area, s_pitch = s
+    for mv in main_values:
+        mm = _parse_slab_rebar(mv)
+        if mm is None:
+            continue
+        m_area, m_pitch = mm
+        if m_pitch == s_pitch and m_area >= s_area - 1.0:
+            return True
+    return False
+
 # Union System SS7 形式のスラブ1行: "S1← [ S1 ] [RSL X2 Y2 X3 Y3] 反転 短辺上 D13@200 ..."
 # 行先頭の "S1←" の符号が図面に反映される「型符号」。"[ S1 ]" は計算上の ID で図面とは別。
 _RE_SS7_SLAB_TYPE = re.compile(r"^\s*(C?S\d+[A-Za-z]?)\s*[←⇐]")
@@ -602,8 +646,19 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
         )
     else:
         # 補足・派生検討（"(34')" 等）の配筋は主検討の代表値に集約しない。
-        # 主検討（既存）の配筋を保持し、補足検討の配筋値はマージしない。
+        # 主検討（既存）の配筋を保持する。ただし補足検討の配筋が主検討で
+        # 覆われていない（= 図面の主検討配筋では不足の可能性）場合は、
+        # needs_review を立てて整合チェックで「要目視確認」を発出する。
         if cur.get("supplementary"):
+            uncovered = [v for v in cur["top"] if not _rebar_covered(v, existing.top_rebar)]
+            uncovered += [v for v in cur["bottom"] if not _rebar_covered(v, existing.bottom_rebar)]
+            if uncovered and not existing.needs_review:
+                existing.needs_review = True
+                existing.review_note = (
+                    "補足検討（プライム付ブロック）の配筋が主検討で覆われていません"
+                    f"（補足: {' / '.join(dict.fromkeys(uncovered))}）。"
+                    "計算書の各検討と図面を確認してください。"
+                )
             return
         # 値を補完（後から見つかったブロックの情報を足す）
         if existing.thickness is None and cur["t"]:

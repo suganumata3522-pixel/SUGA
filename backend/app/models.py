@@ -97,6 +97,10 @@ class SlabMember(BaseModel):
     location: Optional[LocationHint] = None
     field_bboxes: dict[str, tuple[float, float, float, float]] = Field(default_factory=dict)
     note: Optional[str] = None
+    # 補足検討（"(34')" 等）の配筋が主検討で覆われていない場合のフラグ。
+    # True なら整合チェックで「要目視確認」を発出する。
+    needs_review: bool = False
+    review_note: Optional[str] = None
 
 
 class SlabSet(BaseModel):

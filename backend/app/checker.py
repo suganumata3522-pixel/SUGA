@@ -422,7 +422,15 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                     drawing_loc=_slab_loc(d, key),
                     calc_loc=_slab_loc(c, key),
                 ))
-        if rebar_fields:
+        # 補足検討（"(34')"）の配筋が主検討で覆われていない場合は、
+        # 配筋不一致ではなく「要目視確認」とする（計算書の各検討要確認）。
+        if c.needs_review:
+            diffs.append(Diff(
+                kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
+                note=c.review_note,
+                drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+            ))
+        elif rebar_fields:
             diffs.append(Diff(
                 kind=DiffKind.SLAB_REBAR_MISMATCH, mark=mark, fields=rebar_fields,
                 drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
