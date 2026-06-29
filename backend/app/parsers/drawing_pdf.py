@@ -185,10 +185,21 @@ def _rebar_pairs(words: list[dict], y: float, x_min: float, x_max: float) -> lis
     - 分離形式: "N" + "-D??" (+ "@???") の 2〜3 トークン
     - 結合形式: "N-D??" あるいは "N-D??@???" の 1 トークン
     両方を 1 つの値として扱う。
+
+    なお "@ピッチ"（"@200" 等）は直前の鉄筋値の一部であり、セル境界
+    (x_max) のすぐ外側に置かれることがある（例: 元端 STP "3-D13@200" で
+    "@200" だけが x_max を僅かに超える）。これを取りこぼすと
+    "3-D13@200" が "3-D13" になってしまうため、@ピッチトークンに
+    限り x_max + マージン まで収集対象に含める。次の位置の先頭本数
+    （通常の数値トークン）は x_max で従来どおり区切られるため、
+    隣セルの値を誤って取り込むことはない。
     """
+    _PITCH_MARGIN = 26
     ws = sorted(
         [w for w in words
-         if abs(float(w["top"]) - y) <= 4 and x_min <= float(w["x0"]) <= x_max],
+         if abs(float(w["top"]) - y) <= 4 and x_min <= float(w["x0"])
+         and (float(w["x0"]) <= x_max
+              or (re.match(r"^@\d+$", w["text"]) and float(w["x0"]) <= x_max + _PITCH_MARGIN))],
         key=lambda w: float(w["x0"]),
     )
     pairs: list[tuple[float, str]] = []

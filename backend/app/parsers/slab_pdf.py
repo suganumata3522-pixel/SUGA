@@ -285,6 +285,10 @@ _RE_SLAB_ANCHOR = re.compile(r"\blx\s*=|\bt\s*=\s*\d+\s*mm|\bLx\s*=\s*\d+\s*\(cm
 # Super Build/RC2次部材 のスラブ厚（cm単位、全角ｔ）
 _RE_T_CM = re.compile(r"ｔ\s*=\s*(\d+)\s*\(cm\)")
 
+# 補足・派生検討のブロック番号 "(34')" を検出する（プライム付き）。
+# プライム文字は ASCII ' / 右シングルクォート ’ / プライム ′ を許容。
+_RE_PRIME_BLOCK = re.compile(r"^\s*[\(（]\s*\d+\s*['’′]\s*[\)）]")
+
 # Union System SS7 形式のスラブ1行: "S1← [ S1 ] [RSL X2 Y2 X3 Y3] 反転 短辺上 D13@200 ..."
 # 行先頭の "S1←" の符号が図面に反映される「型符号」。"[ S1 ]" は計算上の ID で図面とは別。
 _RE_SS7_SLAB_TYPE = re.compile(r"^\s*(C?S\d+[A-Za-z]?)\s*[←⇐]")
@@ -377,6 +381,7 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
             if _RE_SLAB_ANCHOR.search(line):
                 mark = note = None
                 header_bbox = None
+                supplementary = False
                 # 直前の非空行を数行遡って符号を含む見出しを探す
                 # （"自主訂正No.X" 等の注記が間に挟まることがある）
                 seen_non_empty = 0
@@ -389,6 +394,11 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                     if cand_mark:
                         mark, note = cand_mark, cand_note
                         header_bbox = _span_bbox(line_groups[back])
+                        # ブロック番号にプライム（"(34')"）が付く検討は、主検討
+                        # （"(34)"）に対する補足・派生検討（先端庇など）。主検討の
+                        # 配筋が代表値であり、補足検討の配筋を集約すると過剰な
+                        # 配筋値が混入するため、補足検討フラグを立てる。
+                        supplementary = bool(_RE_PRIME_BLOCK.match(prev_line))
                         break
                     if seen_non_empty >= 6:
                         break
@@ -403,6 +413,7 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                     "top": [], "bottom": [],
                     "bboxes": {},
                     "header_bbox": header_bbox,
+                    "supplementary": supplementary,
                 }
                 tm = _RE_T.search(line)
                 if tm:
@@ -590,6 +601,10 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
             note=cur["note"] or None,
         )
     else:
+        # 補足・派生検討（"(34')" 等）の配筋は主検討の代表値に集約しない。
+        # 主検討（既存）の配筋を保持し、補足検討の配筋値はマージしない。
+        if cur.get("supplementary"):
+            return
         # 値を補完（後から見つかったブロックの情報を足す）
         if existing.thickness is None and cur["t"]:
             existing.thickness = cur["t"]
