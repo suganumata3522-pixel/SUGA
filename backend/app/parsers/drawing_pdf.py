@@ -140,21 +140,39 @@ def _split_by_breaks(ws: list[dict], breaks: list[float]) -> list[str]:
     return [_join_words(p) for p in parts]
 
 
-# 位置 行に現れても「配筋位置の列」ではなく詳細・注記の引出しラベルである語。
+# 位置 行に現れても「配筋位置の列」ではなく詳細・注記の引出しラベルに含まれる語。
 # これらを位置ラベルに含めると、符号セルの担当範囲がその引出し位置まで
-# 不要に広がり、関係ない図（継手要領・定着要領など）まで枠に入ってしまう。
-_NON_POSITION_LABELS = ("機械式継手", "継手要領", "定着要領", "定着", "要領", "増打部")
+# 不要に広がり、関係ない図（継手要領・定着要領・開口補強筋・梁天端増打部の
+# 定着要領など）まで枠に入ってしまう。部分一致（substring）で判定する。
+_NON_POSITION_KEYWORDS = ("機械式", "継手", "要領", "定着", "増打", "開口", "補強筋")
+
+
+def _is_position_label(text: str) -> bool:
+    """位置ラベル（配筋位置の列見出し）として妥当かを判定する。
+
+    詳細引出し（"梁天端増打部の定着要領" "開口補強筋" 等）・鉄筋値
+    （"2-D13" 等）・開口補強の方向記号（縦/横/斜）は位置ではないため除外。
+    """
+    if not text or text == "位置":
+        return False
+    if any(kw in text for kw in _NON_POSITION_KEYWORDS):
+        return False
+    if _REBAR_COMBINED_RE.match(text):
+        return False
+    if text in ("縦", "横", "斜"):
+        return False
+    return True
 
 
 def _collect_pos_labels(words: list[dict], pos_y: float, x_min: float, x_max: float) -> list[tuple[float, str]]:
     """位置 行の位置ラベルを (中心x, テキスト) で返す。「中」「央」は結合。
 
-    詳細引出し（機械式継手・定着要領 等）は配筋位置の列ではないため除外する。
+    詳細引出し（機械式継手・定着要領・開口補強筋 等）は配筋位置の列では
+    ないため除外する。
     """
     row = sorted(
         [w for w in words
-         if abs(float(w["top"]) - pos_y) <= 4 and w["text"] != "位置"
-         and w["text"] not in _NON_POSITION_LABELS
+         if abs(float(w["top"]) - pos_y) <= 4 and _is_position_label(w["text"])
          and x_min <= float(w["x0"]) <= x_max],
         key=lambda w: float(w["x0"]),
     )
@@ -641,7 +659,7 @@ class DrawingPdfParser(Parser):
         pos_y = grp.get("位置")
         pos_labels: list[tuple[float, str]] = []
         if pos_y is not None:
-            row = [w for w in words if abs(float(w["top"]) - pos_y) <= 4 and w["text"] != "位置"]
+            row = [w for w in words if abs(float(w["top"]) - pos_y) <= 4 and _is_position_label(w["text"])]
             row.sort(key=lambda w: float(w["x0"]))
             skip = False
             for k, w in enumerate(row):

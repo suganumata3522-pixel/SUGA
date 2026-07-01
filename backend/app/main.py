@@ -111,6 +111,8 @@ def _parse_calcs() -> tuple[MemberSet, SlabSet]:
         for m in ms.members:
             if m.location:
                 m.location.file_id = fid
+            for loc in m.extra_locations:
+                loc.file_id = fid
         members.extend(ms.members)
         ss = parse_calc_slabs(path)
         for s in ss.slabs:

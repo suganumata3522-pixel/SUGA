@@ -319,16 +319,27 @@ export default function App() {
 }
 
 function ComparePane({ title, loc }: { title: string; loc?: Locator | null }) {
+  // 同一符号が計算書内の複数検討にある場合、主 + 追加検討を並べて表示する。
+  const locs: Locator[] = loc?.file_id
+    ? [loc, ...((loc.extra_locs ?? []).filter((l) => l.file_id))]
+    : [];
+  const multi = locs.length > 1;
   return (
     <div className="compare-pane">
       <div className="compare-pane-head">
         {title}
-        {loc?.file_id ? <span className="muted">　p.{loc.page}</span> : null}
+        {locs.length === 1 ? <span className="muted">　p.{locs[0].page}</span> : null}
+        {multi ? <span className="muted">　検討 {locs.length} 件</span> : null}
       </div>
       <div className="compare-pane-img">
-        {loc?.file_id
-          ? <img src={highlightUrl(loc)} alt={title} />
-          : <div className="compare-empty">この符号に該当する記載がありません</div>}
+        {locs.length === 0
+          ? <div className="compare-empty">この符号に該当する記載がありません</div>
+          : locs.map((l, i) => (
+              <div key={i} className="compare-study">
+                {multi ? <div className="compare-study-label">検討 {i + 1}　p.{l.page}</div> : null}
+                <img src={highlightUrl(l)} alt={`${title} ${i + 1}`} />
+              </div>
+            ))}
       </div>
     </div>
   );

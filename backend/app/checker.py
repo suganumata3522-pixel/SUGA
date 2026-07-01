@@ -37,6 +37,9 @@ class Locator(BaseModel):
     diff_bbox: tuple[float, float, float, float] | None = None
     search: str | None = None  # bbox が無い時に使う検索語（通常は符号）
     file_id: str | None = None  # どのアップロードPDFか
+    # 同一符号が計算書内の複数検討ブロックに登場する場合の追加位置。
+    # PDF照合で全ての検討ブロックを並べて表示するために使う。
+    extra_locs: list["Locator"] = []
 
 
 class FieldDiff(BaseModel):
@@ -121,11 +124,24 @@ def _drawing_loc(d: BeamMember | None) -> Locator | None:
                    file_id=d.location.file_id)
 
 
+def _extra_locs(m: BeamMember | None) -> list[Locator]:
+    """同一符号が計算書内の複数検討ブロックに登場する場合の追加位置を
+    Locator 群に変換する。bbox が取れているものだけを対象とする。"""
+    if m is None:
+        return []
+    out: list[Locator] = []
+    for loc in getattr(m, "extra_locations", []):
+        if loc.bbox is None:
+            continue
+        out.append(Locator(page=loc.page, bbox=loc.bbox, search=m.mark, file_id=loc.file_id))
+    return out
+
+
 def _calc_loc(c: BeamMember | None) -> Locator | None:
     if c is None or c.location is None:
         return None
     return Locator(page=c.location.page, bbox=c.location.bbox, search=c.mark,
-                   file_id=c.location.file_id)
+                   file_id=c.location.file_id, extra_locs=_extra_locs(c))
 
 
 def _field_loc(m: BeamMember | None, key: str) -> Locator | None:
@@ -134,6 +150,7 @@ def _field_loc(m: BeamMember | None, key: str) -> Locator | None:
     bbox = 部材全体（PDF照合の表示範囲・橙枠）、
     diff_bbox = そのフィールドの bbox（差分の赤枠）。
     フィールド bbox が無いときは部材全体だけを返す。
+    同一符号が計算書内の複数検討にある場合は extra_locs に別検討を含める。
     """
     if m is None or m.location is None:
         return None
@@ -142,7 +159,7 @@ def _field_loc(m: BeamMember | None, key: str) -> Locator | None:
     primary = member_bb or field_bb
     diff = field_bb if (field_bb and field_bb != member_bb) else None
     return Locator(page=m.location.page, bbox=primary, diff_bbox=diff,
-                   search=m.mark, file_id=m.location.file_id)
+                   search=m.mark, file_id=m.location.file_id, extra_locs=_extra_locs(m))
 
 
 # 通り芯参照（X1 / Y2 等）の検出パターン。

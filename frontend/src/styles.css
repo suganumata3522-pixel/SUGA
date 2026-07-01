@@ -292,6 +292,13 @@ button.link:hover { background: #eff6ff; }
 }
 .compare-pane-img { overflow: auto; padding: 6px; max-height: 80vh; }
 .compare-pane-img img { display: block; max-width: 100%; }
+.compare-study + .compare-study { margin-top: 10px; border-top: 1px dashed #d1d5db; padding-top: 8px; }
+.compare-study-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+  margin-bottom: 4px;
+}
 .compare-empty {
   color: #9ca3af;
   padding: 48px 12px;

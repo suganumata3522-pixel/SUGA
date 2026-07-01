@@ -9,6 +9,8 @@ export type Locator = {
   diff_bbox?: [number, number, number, number] | null;
   search?: string | null;
   file_id?: string | null;
+  // 同一符号が計算書内の複数検討にある場合の追加位置（PDF照合で全て表示）。
+  extra_locs?: Locator[] | null;
 };
 
 export type FieldDiff = {

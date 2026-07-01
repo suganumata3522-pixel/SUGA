@@ -690,9 +690,6 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
 
         for mi, mw in enumerate(mark_words):
             mark_text = mw["text"]
-            target = next((m for m in members if m.mark == mark_text and not m.field_bboxes), None)
-            if target is None:
-                continue
             grp = cols[mi * per:(mi + 1) * per]
             if not grp:
                 continue
@@ -714,11 +711,26 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
                 nxt_lo = min(float(w["x0"]) for w in nxt) if nxt else grp_hi + 12
                 x_hi = (grp_hi + nxt_lo) / 2
 
+            bbox = (x_lo, y_top, x_hi, y_bot)
             field_bboxes: dict[str, tuple[float, float, float, float]] = {}
             for key, ly in sub_label_y.items():
                 field_bboxes[key] = (x_lo, ly - 4, x_hi, ly + 12)
-            target.field_bboxes = field_bboxes
-            target.location = LocationHint(page=page_idx, bbox=(x_lo, y_top, x_hi, y_bot))
+
+            # 主検討（まだ field_bboxes 未設定）に bbox を付与。
+            target = next((m for m in members if m.mark == mark_text and not m.field_bboxes), None)
+            if target is not None:
+                target.field_bboxes = field_bboxes
+                target.location = LocationHint(page=page_idx, bbox=bbox)
+                continue
+            # 主検討が既に確定済みの場合、このページに対応する別検討
+            # (extra_locations) の bbox をここで補完する。PDF照合で全ての
+            # 検討ブロックを表示できるようにする。
+            member = next((m for m in members if m.mark == mark_text), None)
+            if member is not None:
+                for loc in member.extra_locations:
+                    if loc.page == page_idx and loc.bbox is None:
+                        loc.bbox = bbox
+                        break
 
 
 
