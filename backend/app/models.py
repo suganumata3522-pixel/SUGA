@@ -78,6 +78,14 @@ class MemberSet(BaseModel):
     members: list[BeamMember] = Field(default_factory=list)
 
 
+class SlabStudy(BaseModel):
+    """計算書内の1検討ブロック（同一符号が複数の部屋/位置で検討される）。"""
+    top_rebar: list[str] = Field(default_factory=list)
+    bottom_rebar: list[str] = Field(default_factory=list)
+    location: Optional[LocationHint] = None
+    note: Optional[str] = None  # 検討見出し（例 "12-居室(S18)"）
+
+
 class SlabMember(BaseModel):
     """RCスラブ1枚（符号単位）。
 
@@ -101,6 +109,11 @@ class SlabMember(BaseModel):
     # True なら整合チェックで「要目視確認」を発出する。
     needs_review: bool = False
     review_note: Optional[str] = None
+    # 同一符号が計算書内の複数検討ブロックに登場する場合の各検討。
+    # studies[0] が主検討（location と対応）。複数ある場合、図面がどの検討と
+    # 整合するかを判定し、全検討を PDF照合で並べて表示するために使う。
+    studies: list[SlabStudy] = Field(default_factory=list)
+    extra_locations: list[LocationHint] = Field(default_factory=list)
 
 
 class SlabSet(BaseModel):

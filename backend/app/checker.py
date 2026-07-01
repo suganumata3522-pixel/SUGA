@@ -356,6 +356,18 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
 # ---------------------------------------------------------------------------
 # スラブの整合チェック
 # ---------------------------------------------------------------------------
+def _slab_extra_locs(s: SlabMember | None) -> list[Locator]:
+    """スラブの追加検討ブロックの位置を Locator 群に変換する。"""
+    if s is None:
+        return []
+    out: list[Locator] = []
+    for loc in getattr(s, "extra_locations", []):
+        if loc.bbox is None:
+            continue
+        out.append(Locator(page=loc.page, bbox=loc.bbox, search=s.mark, file_id=loc.file_id))
+    return out
+
+
 def _slab_loc(s: SlabMember | None, key: str | None = None) -> Locator | None:
     if s is None or s.location is None:
         return None
@@ -368,7 +380,18 @@ def _slab_loc(s: SlabMember | None, key: str | None = None) -> Locator | None:
         primary = member_bb
         diff = None
     return Locator(page=s.location.page, bbox=primary, diff_bbox=diff,
-                   search=s.mark, file_id=s.location.file_id)
+                   search=s.mark, file_id=s.location.file_id,
+                   extra_locs=_slab_extra_locs(s))
+
+
+def _slab_study_matches(d: SlabMember, study) -> bool:
+    """図面スラブ d が計算書の1検討 study と（上端・下端の配筋集合で）整合するか。"""
+    for d_attr, s_attr in (("top_rebar", "top_rebar"), ("bottom_rebar", "bottom_rebar")):
+        ds = set(_ordered_unique(getattr(d, d_attr)))
+        ss = set(_ordered_unique(getattr(study, s_attr)))
+        if ds and ss and ds != ss:
+            return False
+    return True
 
 
 def _ordered_unique(vals: list[str]) -> list[str]:
@@ -439,6 +462,11 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                     drawing_loc=_slab_loc(d, key),
                     calc_loc=_slab_loc(c, key),
                 ))
+        # 計算書内に同符号で複数の検討ブロックがあるか（配筋のある study のみ）。
+        studies = [st for st in getattr(c, "studies", [])
+                   if _ordered_unique(st.top_rebar) or _ordered_unique(st.bottom_rebar)]
+        multi_study = len(studies) >= 2
+
         # 補足検討（"(34')"）の配筋が主検討で覆われていない場合は、
         # 配筋不一致ではなく「要目視確認」とする（計算書の各検討要確認）。
         if c.needs_review:
@@ -447,6 +475,30 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                 note=c.review_note,
                 drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
             ))
+        elif multi_study:
+            # 各検討と図面を突き合わせ、整合する検討数を数える。
+            matched = sum(1 for st in studies if _slab_study_matches(d, st))
+            n = len(studies)
+            if matched == 0:
+                # どの検討とも不整合 → 配筋不一致（実差）
+                if rebar_fields:
+                    diffs.append(Diff(
+                        kind=DiffKind.SLAB_REBAR_MISMATCH, mark=mark, fields=rebar_fields,
+                        drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+                    ))
+            elif matched < n:
+                # 一部の検討のみ整合 → 要目視確認（全検討を並べて確認できるよう
+                # calc_loc に全検討の位置を含める）
+                note = (
+                    f"計算書に同符号で {n} 件の検討があり、うち {matched} 件は図面と整合、"
+                    f"{n - matched} 件は不整合です。各検討を確認してください。"
+                )
+                diffs.append(Diff(
+                    kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
+                    note=note,
+                    drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+                ))
+            # matched == n（全検討が整合）は差分なし＝一致扱い（下の len==before で MATCH）
         elif rebar_fields:
             diffs.append(Diff(
                 kind=DiffKind.SLAB_REBAR_MISMATCH, mark=mark, fields=rebar_fields,

@@ -400,15 +400,19 @@ class DrawingPdfParser(Parser):
         out: list[BeamMember] = []
         for gi, grp in enumerate(groups):
             y_top = grp["符号"]
-            # 次グループの符号 y を下限とする。最終グループは固定 +150 では
-            # 梁成の深い基礎梁（FCG/FCB 等で断面図が長く、配筋行が下方に
-            # ある）の配筋行・断面図を囲めないため、このグループのラベル行
-            # （断面/上端筋/下端筋/STP/腹筋）の最下 y + 余白まで広げる。
+            # 枠の下端は、このグループのラベル行（断面/上端筋/下端筋/STP/腹筋）の
+            # 最下 y + 余白とする。これにより:
+            #  ・梁成の深い基礎梁（FCG/FCB 等で断面図が長く配筋行が下方にある）でも
+            #    配筋行・断面図をすべて内包できる（最下ラベル=腹筋まで届く）。
+            #  ・浅い梁で次グループ（別テーブルのスラブリスト等）が下方に離れて
+            #    いる場合に、その符号行まで枠が伸びて空白や別表を囲ってしまう
+            #    のを防ぐ。
+            # 次グループが存在する場合は、その符号 y を超えないようにクランプする。
+            content_bot = max(grp.values()) + 22
             if gi + 1 < len(groups):
-                y_bot = groups[gi + 1]["符号"]
+                y_bot = min(content_bot, groups[gi + 1]["符号"])
             else:
-                last_label_y = max(grp.values())
-                y_bot = max(y_top + 150, last_label_y + 22)
+                y_bot = content_bot
             # この行帯にある符号語を、対応するラベル列 (label_x0) より右側で探す
             band = [
                 w for w in words
@@ -545,8 +549,8 @@ class DrawingPdfParser(Parser):
                         words, grp, x_lo, x_hi, positions)
                 fc_code = self._extract_fc_code(words, grp, fc_lo, fc_hi)
                 mark_center_x = (float(mw["x0"]) + float(mw["x1"])) / 2
-                B = self._extract_section_B(words, grp, fc_lo, fc_hi, mark_center_x)
-                field_bboxes = self._field_bboxes(grp, terr_lo, terr_hi)
+                B, b_box = self._extract_section_B(words, grp, fc_lo, fc_hi, mark_center_x)
+                field_bboxes = self._field_bboxes(grp, terr_lo, terr_hi, b_box=b_box)
                 # 複合符号（"B1（B1A）" 等）は同一断面・配筋・bbox を共有する
                 # 派生符号を含めて全て emit する。
                 for mk in marks:
@@ -678,11 +682,24 @@ class DrawingPdfParser(Parser):
         return False, None
 
     @staticmethod
-    def _field_bboxes(grp: dict, x_lo: float, x_hi: float) -> dict[str, tuple[float, float, float, float]]:
-        """ラベル行 y 位置からフィールド単位の bbox を組み立てる。"""
+    def _field_bboxes(grp: dict, x_lo: float, x_hi: float,
+                      b_box: tuple[float, float, float, float] | None = None
+                      ) -> dict[str, tuple[float, float, float, float]]:
+        """ラベル行 y 位置からフィールド単位の bbox を組み立てる。
+
+        断面幅 B は、断面ラベル行ではなく実際の幅数値の位置（b_box）に
+        赤枠を合わせる。梁成の深い梁では断面図が長く、幅数値が断面ラベルの
+        直下ではなく図の最下段（上端筋直前）に来るため、ラベル行基準だと
+        赤枠が幅数値からずれる。
+        """
         out: dict[str, tuple[float, float, float, float]] = {}
+        # B は幅数値の実位置（b_box）を優先。無ければ断面ラベル行にフォールバック。
+        if b_box is not None:
+            out["B"] = (x_lo, b_box[1] - 2, x_hi, b_box[3] + 2)
+        elif grp.get("断面") is not None:
+            y = grp["断面"]
+            out["B"] = (x_lo, y - 3, x_hi, y + 13)
         spec = [
-            ("B", "断面", -3, 13),
             ("top", "上端筋", -4, 9),
             ("bottom", "下端筋", -4, 9),
             ("stirrup", "STP", -4, 9),
@@ -810,8 +827,9 @@ class DrawingPdfParser(Parser):
         return None
 
     @staticmethod
-    def _extract_section_B(words, grp, x_lo, x_hi, mark_center_x: float | None = None) -> int | None:
-        """断面の幅 B を抽出する。
+    def _extract_section_B(words, grp, x_lo, x_hi, mark_center_x: float | None = None):
+        """断面の幅 B を抽出する。戻り値は (B値, 幅数値の bbox)。B が取れない
+        場合は (None, None)。bbox は差分赤枠を実際の幅数値へ合わせるために使う。
 
         梁リストの断面図には、上から順に
           ・梁天端レベル（"1SL-350" 等、基準レベルからの下がり）
@@ -837,7 +855,7 @@ class DrawingPdfParser(Parser):
         y_pos = grp.get("位置")
         y_top_label = grp.get("上端筋")
         if y_sec is None and y_pos is None:
-            return None
+            return None, None
 
         def _val(w):
             try: return int(w["text"])
@@ -864,7 +882,7 @@ class DrawingPdfParser(Parser):
             and 150 <= _val(w) <= 1500
         ]
         if not cands:
-            return None
+            return None, None
         # 最下段（top 最大）を優先。top を ±4pt でビン化して同段扱いにし、
         # 同段内では符号中心 x に最も近いものを採る。
         max_top = max(float(w["top"]) for w in cands)
@@ -874,7 +892,10 @@ class DrawingPdfParser(Parser):
         else:
             bottom_row.sort(key=lambda w: float(w["x0"]))
         try:
-            return int(bottom_row[0]["text"])
-        except ValueError:
-            return None
+            chosen = bottom_row[0]
+            box = (float(chosen["x0"]), float(chosen["top"]),
+                   float(chosen["x1"]), float(chosen["bottom"]))
+            return int(chosen["text"]), box
+        except (ValueError, KeyError):
+            return None, None
 

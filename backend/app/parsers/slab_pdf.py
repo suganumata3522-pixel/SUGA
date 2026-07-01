@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ..models import LocationHint, SlabMember, SlabSet, Source
+from ..models import LocationHint, SlabMember, SlabSet, SlabStudy, Source
 from .pdf_cache import get_pages
 
 # スラブ符号: S18 / S25A / CS26 / CS315 など
@@ -587,6 +587,12 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
     if existing is None:
         # 全体枠 = ヘッダ + 各フィールドの和
         envelope = _bbox_union([header, *bboxes.values()])
+        loc = LocationHint(page=cur["page"], bbox=envelope)
+        study = SlabStudy(
+            top_rebar=list(cur["top"]), bottom_rebar=list(cur["bottom"]),
+            location=loc, note=cur["note"] or None,
+        )
+        cur["_study"] = study
         slabs[mark] = SlabMember(
             mark=mark,
             thickness=cur["t"],
@@ -596,9 +602,10 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
             concrete_grade=cur["fc"],
             support=cur["support"],
             source=Source.CALC,
-            location=LocationHint(page=cur["page"], bbox=envelope),
+            location=loc,
             field_bboxes=dict(bboxes),
             note=cur["note"] or None,
+            studies=[study],
         )
     else:
         # 補足・派生検討（"(34')" 等）の配筋は主検討の代表値に集約しない。
@@ -617,6 +624,22 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
                     "計算書の各検討と図面を確認してください。"
                 )
             return
+        # 検討ブロック単位で study を記録する。_finalize_calc_slab は1ブロック
+        # につき複数回（アンカー/上端/下端）呼ばれるため、cur["_study"] で
+        # 同一ブロックの study を使い回し、新規ブロックのときだけ追加する。
+        study = cur.get("_study")
+        if study is None:
+            envelope2 = _bbox_union([header, *bboxes.values()])
+            study = SlabStudy(
+                location=LocationHint(page=cur["page"], bbox=envelope2),
+                note=cur["note"] or None,
+            )
+            cur["_study"] = study
+            existing.studies.append(study)
+            if study.location is not None:
+                existing.extra_locations.append(study.location)
+        study.top_rebar = list(cur["top"])
+        study.bottom_rebar = list(cur["bottom"])
         # 値を補完（後から見つかったブロックの情報を足す）
         if existing.thickness is None and cur["t"]:
             existing.thickness = cur["t"]
@@ -637,8 +660,10 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
         new_bbs = [v for k, v in bboxes.items() if k not in existing.field_bboxes]
         for k, v in bboxes.items():
             existing.field_bboxes.setdefault(k, v)
-        # 全体枠は新規に取れたフィールドだけを取り込んで拡張する
-        if existing.location is not None and new_bbs:
+        # 全体枠は新規に取れたフィールドだけを取り込んで拡張する。
+        # ただし別ページのブロックとは統合しない（ページ跨ぎの枠は無意味なため）。
+        if (existing.location is not None and new_bbs
+                and existing.location.page == cur["page"]):
             nb = _bbox_union([existing.location.bbox, *new_bbs])
             if nb:
                 existing.location = LocationHint(page=existing.location.page, bbox=nb)

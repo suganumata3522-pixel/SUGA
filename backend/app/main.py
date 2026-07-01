@@ -118,6 +118,11 @@ def _parse_calcs() -> tuple[MemberSet, SlabSet]:
         for s in ss.slabs:
             if s.location:
                 s.location.file_id = fid
+            for loc in s.extra_locations:
+                loc.file_id = fid
+            for st in s.studies:
+                if st.location:
+                    st.location.file_id = fid
         slabs.extend(ss.slabs)
     return (
         MemberSet(source="計算書", file_name="(計算書)", members=members),
