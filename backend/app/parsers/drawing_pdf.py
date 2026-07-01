@@ -20,7 +20,34 @@ from ..models import BeamMember, LocationHint, MemberSet, PositionRebar, Section
 from .base import Parser
 from .pdf_cache import get_pages
 
-_MARK_RE = re.compile(r"^(?:WCB|FCG|FCB|CGX|CGY|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?$")
+_MARK_ALT = r"(?:WCB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?"
+_MARK_RE = re.compile(rf"^{_MARK_ALT}$")
+# 符号トークンが符号で始まるか（"B1（B1A）" 等の複合符号の先頭判定用）
+_MARK_HEAD_RE = re.compile(rf"^{_MARK_ALT}")
+_MARK_FINDALL_RE = re.compile(_MARK_ALT)
+
+
+def _extract_marks_from_token(text: str) -> list[str]:
+    """符号セルのトークンから符号リストを返す。
+
+    構造図の符号セルには "B1（B1A）" や "B5（B5A）<B5B>" のように、主符号と
+    それに付随する派生符号（同一断面・配筋を共有）がまとめて書かれることが
+    ある。この場合 1 列に複数符号が対応する。先頭を主符号、以降を派生符号と
+    してすべて返す。先頭が符号で始まらないトークンは [] を返す。
+
+    例:
+      "B2"            → ["B2"]
+      "B1（B1A）"      → ["B1", "B1A"]
+      "B5（B5A）<B5B>" → ["B5", "B5A", "B5B"]
+    """
+    if not _MARK_HEAD_RE.match(text):
+        return []
+    found = _MARK_FINDALL_RE.findall(text)
+    out: list[str] = []
+    for m in found:
+        if m not in out:
+            out.append(m)
+    return out
 # 主筋径は D10/D13/D16/D19/D22/D25/D29/D32/D35/D38/D41 を許容
 _BAR_SIZE = r"(?:10|13|16|19|22|25|29|32|35|38|41)"
 _REBAR_RE = re.compile(rf"\d+(?:/\d+)?-D{_BAR_SIZE}(?:@\d+)?")
@@ -151,11 +178,17 @@ def _is_position_label(text: str) -> bool:
     """位置ラベル（配筋位置の列見出し）として妥当かを判定する。
 
     詳細引出し（"梁天端増打部の定着要領" "開口補強筋" 等）・鉄筋値
-    （"2-D13" 等）・開口補強の方向記号（縦/横/斜）は位置ではないため除外。
+    （"2-D13" 等）・開口補強の方向記号（縦/横/斜）・注記文
+    （"主筋は取り付く部材に…" 等、ひらがなを含む文）は位置ではないため除外。
+    位置ラベルは 全断面/端部/中央/元端/先端/基端/連続端/通り芯端 等の
+    漢字・英数字のみで構成され、ひらがな（は/の/に/り/く等の助詞）を含まない。
     """
     if not text or text == "位置":
         return False
     if any(kw in text for kw in _NON_POSITION_KEYWORDS):
+        return False
+    # ひらがなを含む語は注記文（"主筋は取り付く部材に" 等）とみなし除外
+    if re.search(r"[぀-ゟ]", text):
         return False
     if _REBAR_COMBINED_RE.match(text):
         return False
@@ -367,7 +400,15 @@ class DrawingPdfParser(Parser):
         out: list[BeamMember] = []
         for gi, grp in enumerate(groups):
             y_top = grp["符号"]
-            y_bot = groups[gi + 1]["符号"] if gi + 1 < len(groups) else y_top + 150
+            # 次グループの符号 y を下限とする。最終グループは固定 +150 では
+            # 梁成の深い基礎梁（FCG/FCB 等で断面図が長く、配筋行が下方に
+            # ある）の配筋行・断面図を囲めないため、このグループのラベル行
+            # （断面/上端筋/下端筋/STP/腹筋）の最下 y + 余白まで広げる。
+            if gi + 1 < len(groups):
+                y_bot = groups[gi + 1]["符号"]
+            else:
+                last_label_y = max(grp.values())
+                y_bot = max(y_top + 150, last_label_y + 22)
             # この行帯にある符号語を、対応するラベル列 (label_x0) より右側で探す
             band = [
                 w for w in words
@@ -376,11 +417,20 @@ class DrawingPdfParser(Parser):
                 # 同じページ内で別のラベル列に到達したら止める
                 and not (w["x0"] > label_x0 + 600 and w["text"] == "符号")
             ]
-            # 符号行 (y≈grp["符号"]) の語を抽出
-            mark_words = [
-                w for w in band
-                if abs(float(w["top"]) - grp["符号"]) <= 3 and _MARK_RE.match(w["text"])
-            ]
+            # 符号行 (y≈grp["符号"]) の語を抽出。"B1（B1A）" のような複合符号は
+            # 1 列に複数符号が対応する（主符号＋派生符号）。各語に marks を付与し、
+            # 列 x の基準は主符号（先頭）とする。
+            mark_words = []
+            for w in band:
+                if abs(float(w["top"]) - grp["符号"]) > 3:
+                    continue
+                marks = _extract_marks_from_token(w["text"])
+                if not marks:
+                    continue
+                aug = dict(w)
+                aug["marks"] = marks
+                aug["text"] = marks[0]  # 列 x/中心の基準は主符号
+                mark_words.append(aug)
             if not mark_words:
                 continue
             # 列幅は次の符号と同列ラベル列の右端で決まる
@@ -432,7 +482,15 @@ class DrawingPdfParser(Parser):
                 if pos_y is not None else []
             )
             active_mark_indices = [mi for mi in range(len(mark_words_sorted)) if mi not in ketsuban_marks]
-            active_mark_xs = [float(mark_words_sorted[mi]["x0"]) for mi in active_mark_indices]
+            # DP 割り当てには符号語の中心 x を使う。x0（左端）だと、複合符号
+            # "B5（B5A）<B5B>" のように符号語の左端が位置ラベル（端部）と同じ x に
+            # 揃うと、そのマークが位置ラベル群に左右から挟まれず straddle ペナルティ
+            # が付き、中央ラベルが隣マークへ誤って割り当てられる。中心 x なら左右の
+            # 位置ラベルで挟まれるため正しく割り当てられる。
+            active_mark_xs = [
+                (float(mark_words_sorted[mi]["x0"]) + float(mark_words_sorted[mi]["x1"])) / 2
+                for mi in active_mark_indices
+            ]
             partition_active = (
                 _partition_labels(pos_labels, active_mark_xs)
                 if pos_labels and active_mark_xs else None
@@ -448,20 +506,22 @@ class DrawingPdfParser(Parser):
             # 各 mark ごとに位置・配筋などを拾う
             for mi, ((x_lo, x_hi), mw) in enumerate(zip(bounds, mark_words_sorted)):
                 mark_x = float(mw["x0"])
+                marks = mw.get("marks", [mw["text"]])
                 if mi in ketsuban_marks:
                     # 欠番符号: 位置・配筋・断面なし。BeamMember として残し note="欠番"。
-                    out.append(BeamMember(
-                        mark=mw["text"],
-                        section=Section(B=None, D=None),
-                        positions=[],
-                        fc_code=None,
-                        source=self.source,
-                        location=LocationHint(page=page_idx, bbox=(x_lo, y_top - 5, x_hi, y_bot - 2)),
-                        field_bboxes={},
-                        needs_review=False,
-                        review_note="欠番",
-                        note="欠番",
-                    ))
+                    for mk in marks:
+                        out.append(BeamMember(
+                            mark=mk,
+                            section=Section(B=None, D=None),
+                            positions=[],
+                            fc_code=None,
+                            source=self.source,
+                            location=LocationHint(page=page_idx, bbox=(x_lo, y_top - 5, x_hi, y_bot - 2)),
+                            field_bboxes={},
+                            needs_review=False,
+                            review_note="欠番",
+                            note="欠番",
+                        ))
                     continue
                 if partition is not None:
                     my_labels = [pos_labels[idx] for idx in partition[mi]]
@@ -487,17 +547,20 @@ class DrawingPdfParser(Parser):
                 mark_center_x = (float(mw["x0"]) + float(mw["x1"])) / 2
                 B = self._extract_section_B(words, grp, fc_lo, fc_hi, mark_center_x)
                 field_bboxes = self._field_bboxes(grp, terr_lo, terr_hi)
-                out.append(BeamMember(
-                    mark=mw["text"],
-                    section=Section(B=B, D=None),
-                    positions=positions,
-                    fc_code=fc_code,
-                    source=self.source,
-                    location=LocationHint(page=page_idx, bbox=(terr_lo, y_top - 5, terr_hi, y_bot - 2)),
-                    field_bboxes=field_bboxes,
-                    needs_review=needs_review,
-                    review_note=review_note,
-                ))
+                # 複合符号（"B1（B1A）" 等）は同一断面・配筋・bbox を共有する
+                # 派生符号を含めて全て emit する。
+                for mk in marks:
+                    out.append(BeamMember(
+                        mark=mk,
+                        section=Section(B=B, D=None),
+                        positions=positions,
+                        fc_code=fc_code,
+                        source=self.source,
+                        location=LocationHint(page=page_idx, bbox=(terr_lo, y_top - 5, terr_hi, y_bot - 2)),
+                        field_bboxes=field_bboxes,
+                        needs_review=needs_review,
+                        review_note=review_note,
+                    ))
         return out
 
     def _extract_mark_positions(self, words, grp, my_labels) -> list[PositionRebar]:
