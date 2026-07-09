@@ -281,7 +281,13 @@ _RE_FC = re.compile(r"Fc(\d+)")
 _RE_SUPPORT = re.compile(r"支持条件：([^,、]+)")
 # スラブ計算ブロックのアンカー: "lx = X.XXm" を含む行、または独立で "t = NNNmm" を含む行。
 # Super Build/RC2次部材 形式の "Lx = NNN (cm)" や全角 "ｔ = NN (cm)" にも対応。
-_RE_SLAB_ANCHOR = re.compile(r"\blx\s*=|\bt\s*=\s*\d+\s*mm|\bLx\s*=\s*\d+\s*\(cm\)|ｔ\s*=\s*\d+\s*\(cm\)")
+# "lx =" は短辺スパン。ただし "ly/lx = 1.30" のような辺長比の一部を
+# 誤検出しないよう、直前が "/" や英字でない場合のみ短辺スパンとみなす。
+_LX = r"(?<![/A-Za-z])lx\s*=\s*\d"
+_RE_SLAB_ANCHOR = re.compile(rf"{_LX}|\bt\s*=\s*\d+\s*mm|\bLx\s*=\s*\d+\s*\(cm\)|ｔ\s*=\s*\d+\s*\(cm\)")
+# 新ブロック開始とみなす主アンカー（lx= / Lx=(cm) / ｔ=(cm)）。
+# 単独の "t = NNN mm" は lx= 行の折り返しであることがあるため主アンカーに含めない。
+_RE_SLAB_PRIMARY_ANCHOR = re.compile(rf"{_LX}|\bLx\s*=\s*\d+\s*\(cm\)|ｔ\s*=\s*\d+\s*\(cm\)")
 # Super Build/RC2次部材 のスラブ厚（cm単位、全角ｔ）
 _RE_T_CM = re.compile(r"ｔ\s*=\s*(\d+)\s*\(cm\)")
 
@@ -377,8 +383,21 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
         for idx, lw in enumerate(line_groups):
             line = " ".join(w["text"] for w in lw)
 
-            # アンカー行（lx=... or t=NNNmm）を起点として新ブロックを開始
-            if _RE_SLAB_ANCHOR.search(line):
+            # アンカー行（lx=... or t=NNNmm）を起点として新ブロックを開始。
+            # ただし "lx = …, t = 180mm, dt = 50mm" の1行が抽出時に2行へ
+            # 折り返され、2行目が "t = 180mm, dt = 50mm" になると、これが
+            # "t = NNN mm" として別アンカーに誤判定され、直前 lx= ブロックの
+            # 複製（配筋なしの空検討）が作られてしまう。lx= や (cm) 形式で
+            # 当たった行のみを「新ブロックの開始」とし、"t = NNN mm" だけで
+            # 当たった継続行は、直前ブロックがまだ配筋を持たない場合は新
+            # ブロックにせず厚み情報の補完として扱う。
+            _is_primary_anchor = bool(_RE_SLAB_PRIMARY_ANCHOR.search(line))
+            _only_t_mm_continuation = (
+                not _is_primary_anchor
+                and cur is not None
+                and not (cur["top"] or cur["bottom"])
+            )
+            if _RE_SLAB_ANCHOR.search(line) and not _only_t_mm_continuation:
                 mark = note = None
                 header_bbox = None
                 supplementary = False
@@ -640,6 +659,11 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
                 existing.extra_locations.append(study.location)
         study.top_rebar = list(cur["top"])
         study.bottom_rebar = list(cur["bottom"])
+        # 検討ブロックの枠を、配筋行 bbox が揃うたびに拡張する（作成時は
+        # ヘッダ＋厚みだけで小さいため、上端筋/下端筋まで届くよう更新）。
+        env = _bbox_union([header, *bboxes.values()])
+        if env is not None and study.location is not None:
+            study.location.bbox = env  # extra_locations と同一オブジェクトなので両方更新される
         # 値を補完（後から見つかったブロックの情報を足す）
         if existing.thickness is None and cur["t"]:
             existing.thickness = cur["t"]

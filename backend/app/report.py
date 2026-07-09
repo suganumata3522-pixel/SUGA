@@ -44,7 +44,18 @@ def _Tbox(page: fitz.Page, rect: fitz.Rect, text: str,
 def _render_side(diff: Diff, side: str) -> tuple[bytes | None, int | None]:
     """差分の片側(構造図 or 計算書)のハイライト画像と元PDFページ番号を返す。
 
-    フィールド差分がある場合は全フィールドの赤枠を1枚にまとめる。
+    主検討（先頭）のみを返す後方互換用。全検討は _render_side_all を使う。
+    """
+    imgs = _render_side_all(diff, side)
+    return imgs[0] if imgs else (None, None)
+
+
+def _render_side_all(diff: Diff, side: str) -> list[tuple[bytes | None, int | None]]:
+    """差分の片側(構造図 or 計算書)の全検討ブロックのハイライト画像リストを返す。
+
+    計算書内に同符号で複数検討がある場合、主検討＋各追加検討(extra_locs)の
+    画像を順に返す。各要素は (png, 元PDFページ番号)。
+    フィールド差分がある場合は全フィールドの赤枠を主検討画像にまとめる。
     """
     field_locs = []
     for f in diff.fields:
@@ -54,31 +65,38 @@ def _render_side(diff: Diff, side: str) -> tuple[bytes | None, int | None]:
     if field_locs:
         primary = next((l for l in field_locs if l.bbox), None)
         if primary is None:
-            return (None, None)
-        page_no = primary.page
-        file_id = primary.file_id
-        bbox = primary.bbox
+            return []
         diff_bbs = [l.diff_bbox for l in field_locs if l.diff_bbox]
     else:
-        m = diff.drawing_loc if side == "drawing" else diff.calc_loc
-        if not m or not m.file_id or not m.bbox:
-            page = m.page if m else None
-            return (None, page)
-        page_no = m.page
-        file_id = m.file_id
-        bbox = m.bbox
+        primary = diff.drawing_loc if side == "drawing" else diff.calc_loc
+        if not primary or not primary.file_id or not primary.bbox:
+            return []
         diff_bbs = []
-    if not file_id:
-        return (None, page_no)
-    path = find_path(file_id)
-    if path is None:
-        return (None, page_no)
-    try:
-        png = render_highlight_png(path, page_no, bbox=bbox,
-                                   diff_bboxes=diff_bbs or None)
-        return (png, page_no)
-    except Exception:
-        return (None, page_no)
+    if not primary.file_id:
+        return []
+    out: list[tuple[bytes | None, int | None]] = []
+    # 主検討（差分赤枠付き）
+    path = find_path(primary.file_id)
+    if path is not None:
+        try:
+            png = render_highlight_png(path, primary.page, bbox=primary.bbox,
+                                       diff_bboxes=diff_bbs or None)
+            out.append((png, primary.page))
+        except Exception:
+            out.append((None, primary.page))
+    # 追加検討（別ブロック。赤枠なし・部材全体枠のみ）
+    for el in (primary.extra_locs or []):
+        if not el.bbox or not el.file_id:
+            continue
+        p2 = find_path(el.file_id)
+        if p2 is None:
+            continue
+        try:
+            png = render_highlight_png(p2, el.page, bbox=el.bbox, diff_bboxes=None)
+            out.append((png, el.page))
+        except Exception:
+            out.append((None, el.page))
+    return out
 
 
 def build_report(
@@ -148,45 +166,59 @@ def _add_cover(out: fitz.Document, diffs: list[Diff],
 
 def _add_diff_page(out: fitz.Document, diff: Diff, category: str,
                    index: int, total: int) -> None:
-    page = out.new_page(width=L_W, height=L_H)
-    # ヘッダ（左：分類・符号・種別／右：ページ番号）
-    _T(page, (28, 30), f"[{category}] {diff.mark}  ／  {_kind_str(diff)}", size=15)
-    _Tbox(page, fitz.Rect(L_W - 200, 18, L_W - 28, 34),
-          f"{index} / {total}", size=10, align=fitz.TEXT_ALIGN_RIGHT,
-          color=(0.45, 0.45, 0.45))
+    """差分1件分のページを追加する。
 
-    y = 52
-    if diff.note:
-        _Tbox(page, fitz.Rect(28, y, L_W - 28, y + 16),
-              f"備考: {diff.note}", size=9, color=(0.35, 0.35, 0.35))
-        y += 16
-    if diff.fields:
-        for f in diff.fields:
-            line = (f"・{f.field}:  図 = {f.drawing_value or '—'}   "
-                    f"／  計算 = {f.calc_value or '—'}")
-            _Tbox(page, fitz.Rect(28, y, L_W - 28, y + 14), line, size=9)
-            y += 13
+    計算書内に同符号で複数検討がある場合、計算書側は主検討＋各追加検討を
+    それぞれ別ページ（継続ページ）に出力する。構造図側は各ページに同じ図を
+    再掲する。1枚に収まらなくても全検討を出力する。
+    """
+    draw_imgs = _render_side_all(diff, "drawing")
+    calc_imgs = _render_side_all(diff, "calc")
+    draw0 = draw_imgs[0] if draw_imgs else (None, None)
 
-    # 2 ペインの画像（左:構造図, 右:計算書）
-    img_top = max(y + 8, 112)
-    gap = 18
-    pane_w = (L_W - 28 * 2 - gap) / 2
-    pane_h = L_H - img_top - 24
+    # 計算書の検討数（最低1）ぶんのページを出す。
+    n_calc = max(1, len(calc_imgs))
+    for k in range(n_calc):
+        page = out.new_page(width=L_W, height=L_H)
+        study_suffix = ""
+        if n_calc > 1:
+            study_suffix = f"　（計算書 検討 {k + 1}/{n_calc}）"
+        # ヘッダ（左：分類・符号・種別／右：件数）
+        _T(page, (28, 30),
+           f"[{category}] {diff.mark}  ／  {_kind_str(diff)}{study_suffix}", size=15)
+        _Tbox(page, fitz.Rect(L_W - 200, 18, L_W - 28, 34),
+              f"{index} / {total}", size=10, align=fitz.TEXT_ALIGN_RIGHT,
+              color=(0.45, 0.45, 0.45))
 
-    panels = [
-        ("構造図", _render_side(diff, "drawing")),
-        ("計算書", _render_side(diff, "calc")),
-    ]
-    for i, (label, (png, page_no)) in enumerate(panels):
-        x0 = 28 + i * (pane_w + gap)
-        # ラベル（元PDFのページ番号付き）
-        full_label = f"{label}　p.{page_no}" if page_no else label
-        _T(page, (x0 + 4, img_top + 11), full_label, size=10, color=(0.3, 0.3, 0.3))
-        # 画像枠
-        img_rect = fitz.Rect(x0, img_top + 16, x0 + pane_w, img_top + 16 + pane_h)
-        page.draw_rect(img_rect, color=(0.82, 0.82, 0.82), width=0.5)
-        if png:
-            page.insert_image(img_rect, stream=png, keep_proportion=True)
-        else:
-            _Tbox(page, img_rect, "該当する記載がありません",
-                  size=11, align=fitz.TEXT_ALIGN_CENTER, color=(0.55, 0.55, 0.55))
+        y = 52
+        if diff.note:
+            _Tbox(page, fitz.Rect(28, y, L_W - 28, y + 28),
+                  f"備考: {diff.note}", size=9, color=(0.35, 0.35, 0.35))
+            y += 28
+        if diff.fields:
+            for f in diff.fields:
+                line = (f"・{f.field}:  図 = {f.drawing_value or '—'}   "
+                        f"／  計算 = {f.calc_value or '—'}")
+                _Tbox(page, fitz.Rect(28, y, L_W - 28, y + 14), line, size=9)
+                y += 13
+
+        # 2 ペインの画像（左:構造図, 右:計算書 検討k）
+        img_top = max(y + 8, 112)
+        gap = 18
+        pane_w = (L_W - 28 * 2 - gap) / 2
+        pane_h = L_H - img_top - 24
+
+        calc_k = calc_imgs[k] if k < len(calc_imgs) else (None, None)
+        calc_label = "計算書" if n_calc == 1 else f"計算書（検討 {k + 1}）"
+        panels = [("構造図", draw0), (calc_label, calc_k)]
+        for i, (label, (png, page_no)) in enumerate(panels):
+            x0 = 28 + i * (pane_w + gap)
+            full_label = f"{label}　p.{page_no}" if page_no else label
+            _T(page, (x0 + 4, img_top + 11), full_label, size=10, color=(0.3, 0.3, 0.3))
+            img_rect = fitz.Rect(x0, img_top + 16, x0 + pane_w, img_top + 16 + pane_h)
+            page.draw_rect(img_rect, color=(0.82, 0.82, 0.82), width=0.5)
+            if png:
+                page.insert_image(img_rect, stream=png, keep_proportion=True)
+            else:
+                _Tbox(page, img_rect, "該当する記載がありません",
+                      size=11, align=fitz.TEXT_ALIGN_CENTER, color=(0.55, 0.55, 0.55))
