@@ -146,7 +146,12 @@ def _parse_drawing_page(words: list[dict], page_idx: int) -> list[SlabMember]:
     rebar_lo = float(main["x0"]) - 32
     rebar_hi = (float(dist["x1"]) + 18) if dist else (float(main["x1"]) + 90)
     box_left = sym_x - 6
-    box_right = (float(bikou["x0"]) - 4) if bikou else rebar_hi + 6
+    # 部材枠の右端は配筋列の右端に合わせる。備考列がある場合でも配筋〜備考
+    # 間の余白まで枠を広げると「枠が配筋の範囲を超えて右へ出る」ため、
+    # 配筋列右端(rebar_hi)と備考列直前のうち内側を採る。
+    box_right = rebar_hi + 6
+    if bikou is not None:
+        box_right = min(box_right, float(bikou["x0"]) - 4)
 
     # スラブ符号を符号列付近・ヘッダより下で検出
     mark_words = sorted(
