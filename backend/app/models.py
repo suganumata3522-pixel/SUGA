@@ -84,6 +84,9 @@ class SlabStudy(BaseModel):
     bottom_rebar: list[str] = Field(default_factory=list)
     location: Optional[LocationHint] = None
     note: Optional[str] = None  # 検討見出し（例 "12-居室(S18)"）
+    # この検討ブロック内のフィールド別 bbox（thickness/top/bottom）。
+    # 不整合の検討ブロックに赤枠を付けるときの対象行の特定に使う。
+    field_bboxes: dict[str, tuple[float, float, float, float]] = Field(default_factory=dict)
 
 
 class SlabMember(BaseModel):

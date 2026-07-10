@@ -429,6 +429,34 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                 if not mark:
                     cur = None
                     continue
+                # Super Build/RC2次部材 形式では "Lx = NNN (cm)" 行と
+                # "ｔ = NN (cm)" 行が別行にあり、どちらも主アンカーに合致する。
+                # 同一ブロック（同符号・同ページ・配筋未取得）で2本目以降の
+                # アンカー行が来た場合は、新しい検討にせず情報の補完として扱う
+                # （タイトルだけの空検討が量産されるのを防ぐ）。
+                if (cur is not None and cur["mark"] == mark
+                        and cur["page"] == page_idx
+                        and not (cur["top"] or cur["bottom"])):
+                    ab = _span_bbox(lw)
+                    cur["anchor_bbox"] = _bbox_union([cur.get("anchor_bbox"), ab])
+                    tm = _RE_T.search(line)
+                    if tm and cur["t"] is None:
+                        cur["t"] = int(tm.group(1))
+                        tb = _thickness_word_bbox(lw)
+                        if tb:
+                            cur["bboxes"]["thickness"] = tb
+                    else:
+                        tcm = _RE_T_CM.search(line)
+                        if tcm and cur["t"] is None:
+                            cur["t"] = int(tcm.group(1)) * 10
+                    fm = _RE_FC.search(line)
+                    if fm and cur["fc"] is None:
+                        cur["fc"] = f"Fc{fm.group(1)}"
+                    sm = _RE_SUPPORT.search(line)
+                    if sm and cur["support"] is None:
+                        cur["support"] = sm.group(1)
+                    _finalize_calc_slab(cur, slabs)
+                    continue
                 cur = {
                     "mark": mark,
                     "note": note,
@@ -437,6 +465,10 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                     "top": [], "bottom": [],
                     "bboxes": {},
                     "header_bbox": header_bbox,
+                    # アンカー行（lx=/t= 行）自体の bbox。ヘッダ行が分割抽出されて
+                    # 左端が欠けるケース（CS8）でも、部材全体枠がブロック本体の
+                    # 左端まで届くように envelope に含める。
+                    "anchor_bbox": _span_bbox(lw),
                     "supplementary": supplementary,
                 }
                 tm = _RE_T.search(line)
@@ -607,14 +639,16 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
     mark = cur["mark"]
     existing = slabs.get(mark)
     header = cur.get("header_bbox")
+    anchor = cur.get("anchor_bbox")
     bboxes = dict(cur.get("bboxes", {}))  # フィールド枠はタイトのまま
     if existing is None:
-        # 全体枠 = ヘッダ + 各フィールドの和
-        envelope = _bbox_union([header, *bboxes.values()])
+        # 全体枠 = ヘッダ + アンカー行 + 各フィールドの和
+        envelope = _bbox_union([header, anchor, *bboxes.values()])
         loc = LocationHint(page=cur["page"], bbox=envelope)
         study = SlabStudy(
             top_rebar=list(cur["top"]), bottom_rebar=list(cur["bottom"]),
             location=loc, note=cur["note"] or None,
+            field_bboxes=dict(bboxes),
         )
         cur["_study"] = study
         slabs[mark] = SlabMember(
@@ -653,7 +687,7 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
         # 同一ブロックの study を使い回し、新規ブロックのときだけ追加する。
         study = cur.get("_study")
         if study is None:
-            envelope2 = _bbox_union([header, *bboxes.values()])
+            envelope2 = _bbox_union([header, anchor, *bboxes.values()])
             study = SlabStudy(
                 location=LocationHint(page=cur["page"], bbox=envelope2),
                 note=cur["note"] or None,
@@ -664,9 +698,10 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
                 existing.extra_locations.append(study.location)
         study.top_rebar = list(cur["top"])
         study.bottom_rebar = list(cur["bottom"])
+        study.field_bboxes = dict(bboxes)
         # 検討ブロックの枠を、配筋行 bbox が揃うたびに拡張する（作成時は
         # ヘッダ＋厚みだけで小さいため、上端筋/下端筋まで届くよう更新）。
-        env = _bbox_union([header, *bboxes.values()])
+        env = _bbox_union([header, anchor, *bboxes.values()])
         if env is not None and study.location is not None:
             study.location.bbox = env  # extra_locations と同一オブジェクトなので両方更新される
         # 値を補完（後から見つかったブロックの情報を足す）

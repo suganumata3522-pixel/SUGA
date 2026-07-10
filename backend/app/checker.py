@@ -162,6 +162,71 @@ def _field_loc(m: BeamMember | None, key: str) -> Locator | None:
                    search=m.mark, file_id=m.location.file_id, extra_locs=_extra_locs(m))
 
 
+def _inset_bbox(bb: tuple[float, float, float, float] | None,
+                m: float = 3.0) -> tuple[float, float, float, float] | None:
+    """ブロック全体を赤枠にするとき、橙の部材枠と重ならないよう少し内側に寄せる。"""
+    if bb is None:
+        return None
+    if bb[2] - bb[0] <= 2 * m or bb[3] - bb[1] <= 2 * m:
+        return bb
+    return (bb[0] + m, bb[1] + m, bb[2] - m, bb[3] - m)
+
+
+def _union_bboxes(bbs: list[tuple[float, float, float, float]]) -> tuple[float, float, float, float] | None:
+    if not bbs:
+        return None
+    return (min(b[0] for b in bbs), min(b[1] for b in bbs),
+            max(b[2] for b in bbs), max(b[3] for b in bbs))
+
+
+def _study_rebar_set(study, attr: str) -> set[str]:
+    """計算書の1検討ブロック内の指定配筋値を集合化する。"""
+    return {getattr(p, attr).replace(" ", "") for p in study if getattr(p, attr)}
+
+
+def _beam_study_mismatches(d: BeamMember, study) -> bool:
+    """図面梁 d と計算書の1検討 study の配筋が不整合か（包絡は整合扱い）。"""
+    for attr in ("top", "bottom", "stirrup", "web"):
+        ds = _aggregate_rebar(d, attr)
+        ss = _study_rebar_set(study, attr)
+        if ds and ss and ds != ss:
+            if len(ds) == 1 and _rebar_envelope_covers(next(iter(ds)), ss):
+                continue
+            return True
+    return False
+
+
+def _beam_study_locators(d: BeamMember, c: BeamMember, mark: str) -> Locator | None:
+    """複数検討の計算書梁について、不整合の検討ブロックに赤枠を付けた
+    Locator（主検討 + extra_locs に他検討）を組み立てる。
+
+    「配筋が整合している検討に赤枠が付き、不整合の検討に赤枠が付かない」
+    誤誘導を防ぐため、検討単位で図面と突き合わせ、不整合の検討ブロック
+    のみ diff_bbox（赤枠）を設定する。全検討が整合（または位置情報の
+    対応が取れない）場合は None を返し、呼び出し側は従来動作を使う。
+    """
+    locs = [c.location] + list(c.extra_locations)
+    if len(locs) != len(c.studies):
+        return None
+    mism = [_beam_study_mismatches(d, st) for st in c.studies]
+    if not any(mism):
+        return None
+    built: list[Locator] = []
+    for lh, mm in zip(locs, mism):
+        if lh is None or lh.bbox is None:
+            continue
+        built.append(Locator(
+            page=lh.page, bbox=lh.bbox,
+            diff_bbox=_inset_bbox(lh.bbox) if mm else None,
+            search=mark, file_id=lh.file_id,
+        ))
+    if not built:
+        return None
+    primary = built[0]
+    primary.extra_locs = built[1:]
+    return primary
+
+
 # 通り芯参照（X1 / Y2 等）の検出パターン。
 _GRID_REF_RE = re.compile(r"[XYＸＹ][0-9０-９]")
 
@@ -326,10 +391,20 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
                     "梁端部・中央等で配筋が異なるため目視確認が必要です。"
                 )
             note_text = " | ".join(p for p in parts if p)
+            # 複数検討のうち図面と不整合の検討ブロックに赤枠を付ける。
+            # （主検討が整合している場合、主ブロックの行赤枠は誤誘導になる
+            # ため、フィールドの calc_loc も検討単位の Locator へ差し替える）
+            calc_locator = _calc_loc(c)
+            if multi_study:
+                sl = _beam_study_locators(d, c, mark)
+                if sl is not None:
+                    calc_locator = sl
+                    for f in rebar_fields:
+                        f.calc_loc = sl
             diffs.append(Diff(
                 kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
                 note=note_text,
-                drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
+                drawing_loc=_drawing_loc(d), calc_loc=calc_locator,
             ))
         elif rebar_mismatch_fields:
             diffs.append(Diff(
@@ -488,15 +563,41 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                     ))
             elif matched < n:
                 # 一部の検討のみ整合 → 要目視確認（全検討を並べて確認できるよう
-                # calc_loc に全検討の位置を含める）
+                # calc_loc に全検討の位置を含める）。図面と不整合の検討ブロック
+                # には赤枠（diff_bbox）を付ける。赤枠は不整合フィールドの配筋行
+                # （取れなければブロック全体）を対象にする。
                 note = (
                     f"計算書に同符号で {n} 件の検討があり、うち {matched} 件は図面と整合、"
                     f"{n - matched} 件は不整合です。各検討を確認してください。"
                 )
+                built: list[Locator] = []
+                for st in studies:
+                    lh = st.location
+                    if lh is None or lh.bbox is None:
+                        continue
+                    dbb = None
+                    if not _slab_study_matches(d, st):
+                        fb = getattr(st, "field_bboxes", {}) or {}
+                        rows = []
+                        for attr, key in (("top_rebar", "top"), ("bottom_rebar", "bottom")):
+                            ds = set(_ordered_unique(getattr(d, attr)))
+                            ss = set(_ordered_unique(getattr(st, attr)))
+                            if ds and ss and ds != ss and key in fb:
+                                rows.append(fb[key])
+                        dbb = _union_bboxes(rows) or _inset_bbox(lh.bbox)
+                    built.append(Locator(page=lh.page, bbox=lh.bbox, diff_bbox=dbb,
+                                         search=mark, file_id=lh.file_id))
+                calc_locator = _slab_loc(c)
+                if built:
+                    primary_loc = built[0]
+                    primary_loc.extra_locs = built[1:]
+                    calc_locator = primary_loc
+                    for f in rebar_fields:
+                        f.calc_loc = calc_locator
                 diffs.append(Diff(
                     kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
                     note=note,
-                    drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+                    drawing_loc=_slab_loc(d), calc_loc=calc_locator,
                 ))
             # matched == n（全検討が整合）は差分なし＝一致扱い（下の len==before で MATCH）
         elif rebar_fields:

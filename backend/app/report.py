@@ -71,7 +71,7 @@ def _render_side_all(diff: Diff, side: str) -> list[tuple[bytes | None, int | No
         primary = diff.drawing_loc if side == "drawing" else diff.calc_loc
         if not primary or not primary.file_id or not primary.bbox:
             return []
-        diff_bbs = []
+        diff_bbs = [primary.diff_bbox] if primary.diff_bbox else []
     if not primary.file_id:
         return []
     out: list[tuple[bytes | None, int | None]] = []
@@ -84,7 +84,7 @@ def _render_side_all(diff: Diff, side: str) -> list[tuple[bytes | None, int | No
             out.append((png, primary.page))
         except Exception:
             out.append((None, primary.page))
-    # 追加検討（別ブロック。赤枠なし・部材全体枠のみ）
+    # 追加検討（別ブロック）。不整合の検討には diff_bbox（赤枠）が付く。
     for el in (primary.extra_locs or []):
         if not el.bbox or not el.file_id:
             continue
@@ -92,7 +92,9 @@ def _render_side_all(diff: Diff, side: str) -> list[tuple[bytes | None, int | No
         if p2 is None:
             continue
         try:
-            png = render_highlight_png(p2, el.page, bbox=el.bbox, diff_bboxes=None)
+            png = render_highlight_png(
+                p2, el.page, bbox=el.bbox,
+                diff_bboxes=[el.diff_bbox] if el.diff_bbox else None)
             out.append((png, el.page))
         except Exception:
             out.append((None, el.page))

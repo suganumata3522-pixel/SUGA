@@ -14,9 +14,11 @@ text/word に対して既知の誤コードポイントを正しい字へ置換�
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
+import fitz  # PyMuPDF: 白塗りで隠されたテキストの検出に使う
 import pdfplumber
 
 
@@ -208,6 +210,81 @@ def _merge_split_labels(words: list[dict]) -> list[dict]:
     return merged
 
 
+def _hidden_chars(fz_page) -> list[tuple[float, float, str]]:
+    """白塗り等の不透明な塗り矩形で「後から」覆われた文字を検出する。
+
+    計算書PDFでは、不要になった検討ブロックを白い塗り矩形で覆って
+    「削除」し、その上に別のテキストを載せる編集が行われることがある。
+    覆われたテキストは見えないが PDF 内には残っており、そのまま抽出すると
+    存在しない検討（例: CS9）を誤検出してしまう。
+
+    描画順（seqno）を見て、テキストより後に描かれた不透明塗り矩形に
+    中心が入る文字を「隠し文字」として (中心x, 中心y, 文字) で返す。
+    文字より前に描かれた塗り（表の背景色など）は対象にしない。
+    """
+    try:
+        covers: list[tuple[fitz.Rect, int]] = []
+        for dr in fz_page.get_drawings():
+            if dr.get("fill") is None:
+                continue
+            if (dr.get("fill_opacity") or 1.0) < 0.9:
+                continue
+            r = dr["rect"]
+            # ごく小さい塗り（罫線・マーカー等）は覆い隠し目的ではない
+            if r.width * r.height < 300:
+                continue
+            covers.append((r, int(dr.get("seqno") or 0)))
+        if not covers:
+            return []
+        out: list[tuple[float, float, str]] = []
+        for span in fz_page.get_texttrace():
+            seq = int(span.get("seqno") or 0)
+            rects = [r for (r, rs) in covers if rs > seq]
+            if not rects:
+                continue
+            for ch in span["chars"]:
+                bb = ch[3]
+                cx = (bb[0] + bb[2]) / 2.0
+                cy = (bb[1] + bb[3]) / 2.0
+                if any(r.x0 <= cx <= r.x1 and r.y0 <= cy <= r.y1 for r in rects):
+                    out.append((cx, cy, chr(ch[0])))
+        return out
+    except Exception:
+        return []
+
+
+def _filter_hidden_words(words: list[dict], hidden: list[tuple[float, float, str]]) -> list[dict]:
+    """隠し文字と位置・内容が一致する語を除外する。
+
+    白塗りの上に別テキストが重ねて描かれている場合、位置の重なりだけで
+    落とすと可視テキストまで巻き添えにするため、語の bbox 内にある
+    隠し文字を連結した文字列と語のテキストが（8割以上）一致する場合のみ
+    「隠し語」と判定して除外する。
+    """
+    if not hidden:
+        return words
+    out: list[dict] = []
+    for w in words:
+        x0, x1 = float(w["x0"]) - 0.5, float(w["x1"]) + 0.5
+        t0, b0 = float(w["top"]) - 0.5, float(w["bottom"]) + 0.5
+        inside = [(cx, ch) for (cx, cy, ch) in hidden
+                  if x0 <= cx <= x1 and t0 <= cy <= b0]
+        if not inside:
+            out.append(w)
+            continue
+        wtext = re.sub(r"\s+", "", w["text"])
+        htext = normalize_pdf_text("".join(ch for _, ch in sorted(inside)))
+        if not wtext:
+            continue  # 空白のみの語が隠し文字上にある → 除外
+        from collections import Counter
+        common = Counter(wtext) & Counter(htext)
+        matched = sum(common.values())
+        if matched >= max(1, int(len(wtext) * 0.8)):
+            continue  # 隠し語として除外
+        out.append(w)
+    return out
+
+
 # 直近 N ファイル分のみ保持する簡易 LRU（メモリ肥大化を防ぐ）
 _MAX_ENTRIES = 6
 _cache: dict[tuple[str, float], list[PageData]] = {}
@@ -227,10 +304,20 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
         return cached
 
     pages: list[PageData] = []
+    # 白塗りで隠されたテキストの検出用に PyMuPDF でも同じファイルを開く
+    try:
+        fz_doc = fitz.open(path)
+    except Exception:
+        fz_doc = None
     with pdfplumber.open(path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
             raw_text = page.extract_text() or ""
             raw_words = page.extract_words(keep_blank_chars=False)
+            # 白塗り矩形で覆われた（見えない）テキストを除外
+            if fz_doc is not None and i <= fz_doc.page_count:
+                hidden = _hidden_chars(fz_doc.load_page(i - 1))
+                if hidden:
+                    raw_words = _filter_hidden_words(raw_words, hidden)
             # CID不具合の正規化＋縦書き数字の逆順補正を適用
             for w in raw_words:
                 w["text"] = _fix_reversed_digits(normalize_pdf_text(w["text"]))
@@ -254,6 +341,8 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
                 height=page_height,
             ))
 
+    if fz_doc is not None:
+        fz_doc.close()
     _cache[key] = pages
     while len(_cache) > _MAX_ENTRIES:
         oldest = next(iter(_cache))
