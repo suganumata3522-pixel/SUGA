@@ -169,6 +169,11 @@ _LABEL_MERGE_TARGETS = {
     ("位", "置"): "位置",
     ("断", "面"): "断面",
     ("腹", "筋"): "腹筋",
+    # 位置ラベルが1文字ずつに割れるCAD出力（E棟形式など）への対応
+    ("元", "端"): "元端",
+    ("先", "端"): "先端",
+    ("中", "央"): "中央",
+    ("基", "端"): "基端",
 }
 
 
@@ -208,6 +213,39 @@ def _merge_split_labels(words: list[dict]) -> list[dict]:
                 continue
         merged.append(w)
     return merged
+
+
+def _compose_text_from_words(words: list[dict], tol: float = 3.0) -> str:
+    """語リストから extract_text() 相当のページテキストを合成する。
+
+    pdfplumber の extract_text() はレイアウト解析が非常に重く
+    （実測でパース時間全体の9割超）、その出力は「y(top) で行に
+    まとめ、x0 順に空白1つで連結」したものとほぼ等価。既に抽出済みの
+    extract_words() の結果から同じテキストを合成することで、
+    ページあたりのパース時間を大幅に短縮する。
+
+    行のまとめ方は pdfplumber の cluster（直前要素との差が tol 以内なら
+    同じ行）に合わせる。
+    """
+    if not words:
+        return ""
+    sw = sorted(words, key=lambda w: float(w["top"]))
+    lines: list[list[dict]] = []
+    cur: list[dict] = [sw[0]]
+    prev = float(sw[0]["top"])
+    for w in sw[1:]:
+        t = float(w["top"])
+        if t - prev <= tol:
+            cur.append(w)
+        else:
+            lines.append(cur)
+            cur = [w]
+        prev = t
+    lines.append(cur)
+    return "\n".join(
+        " ".join(x["text"] for x in sorted(l, key=lambda x: float(x["x0"])))
+        for l in lines
+    )
 
 
 def _hidden_chars(fz_page) -> list[tuple[float, float, str]]:
@@ -289,6 +327,73 @@ def _filter_hidden_words(words: list[dict], hidden: list[tuple[float, float, str
 _MAX_ENTRIES = 6
 _cache: dict[tuple[str, float], list[PageData]] = {}
 
+# ページ並列抽出の設定。pdfplumber（pdfminer）の文字解釈は純Pythonで
+# 非常に重く、ページ間に依存が無いためプロセス並列で線形に近く速くなる。
+# 結果はページ単位で全く同じものを組み立て直すだけなので、逐次実行と
+# ビット単位で同一になる。YHG_NO_MP=1 で並列を無効化できる。
+_MP_MIN_PAGES = 8      # これ未満のページ数はプロセス起動コストの方が高い
+_MP_MAX_WORKERS = 4
+
+
+def _extract_pages_raw(path: str, indices: list[int], legacy_text: bool) -> list[dict]:
+    """（子プロセスでも実行される）指定ページの生抽出結果を返す。
+
+    重い pdfplumber の語抽出・注釈抽出だけを行い、正規化や隠しテキスト
+    除去などの後処理は親側で行う（逐次実行と同一の結果を保証するため）。
+    """
+    out: list[dict] = []
+    with pdfplumber.open(path) as pdf:
+        for i in indices:
+            page = pdf.pages[i - 1]
+            raw_words = page.extract_words(keep_blank_chars=False)
+            # pickle 転送量を減らすため、パーサーが使うキーだけに絞る
+            raw_words = [
+                {"text": w["text"], "x0": float(w["x0"]), "x1": float(w["x1"]),
+                 "top": float(w["top"]), "bottom": float(w["bottom"])}
+                for w in raw_words
+            ]
+            page_height = float(page.height)
+            out.append({
+                "index": i,
+                "words": raw_words,
+                "annots": _extract_annot_words(page, page_height),
+                "width": float(page.width),
+                "height": page_height,
+                "legacy_text": (page.extract_text() or "") if legacy_text else None,
+            })
+    return out
+
+
+def _extract_all_pages(path: str) -> list[dict]:
+    """全ページの生抽出。ページ数が多いときはプロセス並列で行う。"""
+    legacy_text = os.environ.get("YHG_LEGACY_TEXT") == "1"
+    try:
+        with pdfplumber.open(path) as pdf:
+            n_pages = len(pdf.pages)
+    except Exception:
+        n_pages = 0
+    indices = list(range(1, n_pages + 1))
+    workers = min(_MP_MAX_WORKERS, os.cpu_count() or 1)
+    if (n_pages < _MP_MIN_PAGES or workers <= 1
+            or os.environ.get("YHG_NO_MP") == "1"):
+        return _extract_pages_raw(path, indices, legacy_text)
+    # ラウンドロビンで分配（重いページの偏りを均す）
+    chunks = [indices[k::workers] for k in range(workers)]
+    chunks = [c for c in chunks if c]
+    try:
+        import concurrent.futures
+        with concurrent.futures.ProcessPoolExecutor(max_workers=len(chunks)) as ex:
+            futs = [ex.submit(_extract_pages_raw, path, c, legacy_text) for c in chunks]
+            results: list[dict] = []
+            for f in futs:
+                results.extend(f.result())
+        results.sort(key=lambda e: e["index"])
+        if len(results) == n_pages:
+            return results
+    except Exception:
+        pass  # 並列に失敗したら逐次にフォールバック（PyInstaller 環境の保険）
+    return _extract_pages_raw(path, indices, legacy_text)
+
 
 def get_pages(pdf_path: Path | str) -> list[PageData]:
     """PDFの全ページの抽出結果を返す。同一ファイルなら 2 回目以降はキャッシュを返す。"""
@@ -309,37 +414,43 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
         fz_doc = fitz.open(path)
     except Exception:
         fz_doc = None
-    with pdfplumber.open(path) as pdf:
-        for i, page in enumerate(pdf.pages, start=1):
-            raw_text = page.extract_text() or ""
-            raw_words = page.extract_words(keep_blank_chars=False)
-            # 白塗り矩形で覆われた（見えない）テキストを除外
-            if fz_doc is not None and i <= fz_doc.page_count:
-                hidden = _hidden_chars(fz_doc.load_page(i - 1))
-                if hidden:
-                    raw_words = _filter_hidden_words(raw_words, hidden)
-            # CID不具合の正規化＋縦書き数字の逆順補正を適用
-            for w in raw_words:
-                w["text"] = _fix_reversed_digits(normalize_pdf_text(w["text"]))
-            # AutoCAD PDFSHX=1 で埋め込まれたコメント注釈も単語として取り込む
-            page_height = float(page.height)
-            annot_words = _extract_annot_words(page, page_height)
-            for w in annot_words:
-                w["text"] = _fix_reversed_digits(normalize_pdf_text(w["text"]))
-            if annot_words:
-                raw_words = raw_words + annot_words
-                # 注釈テキストも extract_text 相当に追記
-                annot_text = "\n".join(w["text"] for w in annot_words)
-                raw_text = (raw_text + "\n" + annot_text) if raw_text else annot_text
-            # 縦書きで割れたラベル（符 号 等）を1語に結合
-            raw_words = _merge_split_labels(raw_words)
-            pages.append(PageData(
-                index=i,
-                text=normalize_pdf_text(raw_text),
-                words=raw_words,
-                width=float(page.width),
-                height=page_height,
-            ))
+    for entry in _extract_all_pages(path):
+        i = entry["index"]
+        raw_words = entry["words"]
+        # extract_text() は非常に重いため、抽出済みの語から等価な
+        # テキストを合成する（照合時間の大幅短縮）。
+        # YHG_LEGACY_TEXT=1 のときは従来の extract_text() を使う
+        # （新旧のパース結果を突き合わせる検証用）。
+        if entry["legacy_text"] is not None:
+            raw_text = entry["legacy_text"]
+        else:
+            raw_text = _compose_text_from_words(raw_words)
+        # 白塗り矩形で覆われた（見えない）テキストを除外
+        if fz_doc is not None and i <= fz_doc.page_count:
+            hidden = _hidden_chars(fz_doc.load_page(i - 1))
+            if hidden:
+                raw_words = _filter_hidden_words(raw_words, hidden)
+        # CID不具合の正規化＋縦書き数字の逆順補正を適用
+        for w in raw_words:
+            w["text"] = _fix_reversed_digits(normalize_pdf_text(w["text"]))
+        # AutoCAD PDFSHX=1 で埋め込まれたコメント注釈も単語として取り込む
+        annot_words = entry["annots"]
+        for w in annot_words:
+            w["text"] = _fix_reversed_digits(normalize_pdf_text(w["text"]))
+        if annot_words:
+            raw_words = raw_words + annot_words
+            # 注釈テキストも extract_text 相当に追記
+            annot_text = "\n".join(w["text"] for w in annot_words)
+            raw_text = (raw_text + "\n" + annot_text) if raw_text else annot_text
+        # 縦書きで割れたラベル（符 号 等）を1語に結合
+        raw_words = _merge_split_labels(raw_words)
+        pages.append(PageData(
+            index=i,
+            text=normalize_pdf_text(raw_text),
+            words=raw_words,
+            width=entry["width"],
+            height=entry["height"],
+        ))
 
     if fz_doc is not None:
         fz_doc.close()

@@ -53,12 +53,23 @@ def list_uploads(role: str | None = None) -> list[dict]:
 
 
 def role_paths(role: str) -> list[tuple[str, Path]]:
-    """指定ロールの (id, パス) を昇順で返す。"""
-    res: list[tuple[str, Path]] = []
+    """指定ロールの (id, パス) をアップロード順で返す。
+
+    ファイル名先頭のIDは乱数のため、名前順だと処理順がアップロードの
+    たびに変わってしまう（同一符号が複数ファイルにある場合、どちらの
+    ファイルの内容が採用されるかまで変わる）。更新時刻→名前の順で
+    ソートして決定的にする。
+    """
+    res: list[tuple[float, str, Path]] = []
     for f in sorted(_role_dir(role).glob(f"*{_SEP}*")):
         fid, _, _ = f.name.partition(_SEP)
-        res.append((fid, f))
-    return res
+        try:
+            mt = f.stat().st_mtime
+        except OSError:
+            mt = 0.0
+        res.append((mt, fid, f))
+    res.sort(key=lambda t: (t[0], t[2].name))
+    return [(fid, f) for _, fid, f in res]
 
 
 def find_path(file_id: str) -> Path | None:

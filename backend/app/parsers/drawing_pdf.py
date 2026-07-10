@@ -20,7 +20,7 @@ from ..models import BeamMember, LocationHint, MemberSet, PositionRebar, Section
 from .base import Parser
 from .pdf_cache import get_pages
 
-_MARK_ALT = r"(?:WCB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?"
+_MARK_ALT = r"(?:WCB|CWB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?"
 _MARK_RE = re.compile(rf"^{_MARK_ALT}$")
 # 符号トークンが符号で始まるか（"B1（B1A）" 等の複合符号の先頭判定用）
 _MARK_HEAD_RE = re.compile(rf"^{_MARK_ALT}")

@@ -37,4 +37,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # PDFページ並列抽出（ProcessPoolExecutor）を PyInstaller 化した exe でも
+    # 動かすために必須（run.py と同様）。
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

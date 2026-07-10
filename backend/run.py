@@ -39,4 +39,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # PDFページ並列抽出（ProcessPoolExecutor）を PyInstaller 化した exe でも
+    # 動かすために必須。子プロセスが exe を再実行したとき、ここで
+    # ワーカー処理へ分岐して本体（サーバ起動・ブラウザ起動）が二重に
+    # 走るのを防ぐ。
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

@@ -51,13 +51,13 @@ _RE_BOT_LINE = re.compile(r"^下\s+(.+)$")
 _RE_ST_LINE = re.compile(r"^ST\.\s+(.+)$")
 
 # 梁符号の判定（行内に符号として混在する語かを判定するのに使う）
-_BEAM_MARK_RE = re.compile(r"^(?:WCB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?$")
+_BEAM_MARK_RE = re.compile(r"^(?:WCB|CWB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?$")
 
 # Union System SS7 出力の小梁1行を抽出する正規表現。
 # 例: "[ FB1 ] [B1SL X2 Y3 X3 Y4] 方向 Y 上端 4-D25 4-D25 4-D25 3-D13 MD ..."
 #     "           下端 4-D25 4/2-D25 4-D25 @200 MA ..."
 #     "B×D 500×1850 単スパン φI 1.000 L 8500 ..."
-_RE_SS7_MARK = re.compile(r"^\s*\[\s*((?:WCB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?)\s*\]")
+_RE_SS7_MARK = re.compile(r"^\s*\[\s*((?:WCB|CWB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?)\s*\]")
 _RE_SS7_BXD = re.compile(r"B\s*[×x]\s*D\s+(\d+)\s*[×x]\s*(\d+)")
 _RE_SS7_TOP = re.compile(r"上端\s+(.+)")
 _RE_SS7_BOT = re.compile(r"下端\s+(.+)")
@@ -635,12 +635,20 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
         if not row_words or row_words[0]["text"] != "符号":
             continue
         # マーク列を取得（x 昇順）。同一 mark が複数並ぶケースもそのまま列数に数える。
-        mark_words = sorted(
-            [w for w in row_words[1:] if _BEAM_MARK_RE.match(w["text"])],
-            key=lambda w: float(w["x0"]),
-        )
-        if not mark_words:
+        # "FB2,FB3" のように1列を複数符号が共有するセルは、1列として数えつつ
+        # 全符号に同じ bbox を付与する（_parse_symbol_line で展開）。
+        mark_cells: list[tuple[dict, list[str]]] = []
+        for w in row_words[1:]:
+            if _BEAM_MARK_RE.match(w["text"]):
+                mark_cells.append((w, [w["text"]]))
+            elif re.search(r"[,、・]", w["text"]):
+                cols_in_cell = _parse_symbol_line(w["text"])
+                if len(cols_in_cell) == 1 and len(cols_in_cell[0]) >= 2:
+                    mark_cells.append((w, cols_in_cell[0]))
+        mark_cells.sort(key=lambda t: float(t[0]["x0"]))
+        if not mark_cells:
             continue
+        mark_words = [w for w, _ in mark_cells]
         n_marks = len(mark_words)
 
         # 符号行直後〜次の "符号"/"No."/"断面計算" までを走査し、
@@ -688,8 +696,7 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
         y_top = y - 5
         y_bot = max(sub_label_y.values()) + 18
 
-        for mi, mw in enumerate(mark_words):
-            mark_text = mw["text"]
+        for mi, (mw, cell_marks) in enumerate(mark_cells):
             grp = cols[mi * per:(mi + 1) * per]
             if not grp:
                 continue
@@ -716,21 +723,23 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
             for key, ly in sub_label_y.items():
                 field_bboxes[key] = (x_lo, ly - 4, x_hi, ly + 12)
 
-            # 主検討（まだ field_bboxes 未設定）に bbox を付与。
-            target = next((m for m in members if m.mark == mark_text and not m.field_bboxes), None)
-            if target is not None:
-                target.field_bboxes = field_bboxes
-                target.location = LocationHint(page=page_idx, bbox=bbox)
-                continue
-            # 主検討が既に確定済みの場合、このページに対応する別検討
-            # (extra_locations) の bbox をここで補完する。PDF照合で全ての
-            # 検討ブロックを表示できるようにする。
-            member = next((m for m in members if m.mark == mark_text), None)
-            if member is not None:
-                for loc in member.extra_locations:
-                    if loc.page == page_idx and loc.bbox is None:
-                        loc.bbox = bbox
-                        break
+            # 同一セルの全符号（"FB2,FB3" 等）に同じ bbox を付与する。
+            for mark_text in cell_marks:
+                # 主検討（まだ field_bboxes 未設定）に bbox を付与。
+                target = next((m for m in members if m.mark == mark_text and not m.field_bboxes), None)
+                if target is not None:
+                    target.field_bboxes = dict(field_bboxes)
+                    target.location = LocationHint(page=page_idx, bbox=bbox)
+                    continue
+                # 主検討が既に確定済みの場合、このページに対応する別検討
+                # (extra_locations) の bbox をここで補完する。PDF照合で全ての
+                # 検討ブロックを表示できるようにする。
+                member = next((m for m in members if m.mark == mark_text), None)
+                if member is not None:
+                    for loc in member.extra_locations:
+                        if loc.page == page_idx and loc.bbox is None:
+                            loc.bbox = bbox
+                            break
 
 
 
