@@ -66,7 +66,18 @@ def _render_side_all(diff: Diff, side: str) -> list[tuple[bytes | None, int | No
         primary = next((l for l in field_locs if l.bbox), None)
         if primary is None:
             return []
-        diff_bbs = [l.diff_bbox for l in field_locs if l.diff_bbox]
+        # 主検討ページ上のフィールド赤枠を集める（別ページの枠は混ぜない）
+        diff_bbs = [l.diff_bbox for l in field_locs
+                    if l.diff_bbox and l.page == primary.page
+                    and l.file_id == primary.file_id]
+        # 上端筋・下端筋・STP など複数フィールドが同時に異なる場合、
+        # 赤枠を並べず全フィールドを1つの枠で包絡する（行が隣接して
+        # いて枠が重なり読みにくくなるため）。
+        if len(diff_bbs) > 1:
+            diff_bbs = [(
+                min(b[0] for b in diff_bbs), min(b[1] for b in diff_bbs),
+                max(b[2] for b in diff_bbs), max(b[3] for b in diff_bbs),
+            )]
     else:
         primary = diff.drawing_loc if side == "drawing" else diff.calc_loc
         if not primary or not primary.file_id or not primary.bbox:
@@ -119,9 +130,14 @@ def build_report(
     _add_cover(out, diffs, category, summary)
     targets = [d for d in diffs if include_match or _kind_str(d) != "一致"]
     total = len(targets)
+    # 同一画像（継続ページで繰り返す図面側など）の再埋め込みを避けるため、
+    # 画像バイト列のハッシュ → xref を文書単位でキャッシュする。
+    img_xrefs: dict[str, int] = {}
     for index, d in enumerate(targets, start=1):
-        _add_diff_page(out, d, category, index, total)
-    pdf = out.tobytes()
+        _add_diff_page(out, d, category, index, total, img_xrefs)
+    # deflate=True: 画像・コンテンツを圧縮して埋め込む（無圧縮だと画像1枚
+    # あたり1MB超になりファイルが巨大化する）。
+    pdf = out.tobytes(deflate=True, garbage=3)
     out.close()
     return pdf
 
@@ -167,7 +183,8 @@ def _add_cover(out: fitz.Document, diffs: list[Diff],
 
 
 def _add_diff_page(out: fitz.Document, diff: Diff, category: str,
-                   index: int, total: int) -> None:
+                   index: int, total: int,
+                   img_xrefs: dict[str, int] | None = None) -> None:
     """差分1件分のページを追加する。
 
     計算書内に同符号で複数検討がある場合、計算書側は主検討＋各追加検討を
@@ -220,7 +237,18 @@ def _add_diff_page(out: fitz.Document, diff: Diff, category: str,
             img_rect = fitz.Rect(x0, img_top + 16, x0 + pane_w, img_top + 16 + pane_h)
             page.draw_rect(img_rect, color=(0.82, 0.82, 0.82), width=0.5)
             if png:
-                page.insert_image(img_rect, stream=png, keep_proportion=True)
+                if img_xrefs is None:
+                    page.insert_image(img_rect, stream=png, keep_proportion=True)
+                else:
+                    # 同一画像は最初の1回だけ埋め込み、以降は xref を再利用する
+                    import hashlib
+                    key = hashlib.md5(png).hexdigest()
+                    xref = img_xrefs.get(key, 0)
+                    new_xref = page.insert_image(
+                        img_rect, stream=None if xref else png,
+                        xref=xref, keep_proportion=True)
+                    if isinstance(new_xref, int) and new_xref > 0:
+                        img_xrefs[key] = new_xref
             else:
                 _Tbox(page, img_rect, "該当する記載がありません",
                       size=11, align=fitz.TEXT_ALIGN_CENTER, color=(0.55, 0.55, 0.55))

@@ -184,16 +184,18 @@ def _study_rebar_set(study, attr: str) -> set[str]:
     return {getattr(p, attr).replace(" ", "") for p in study if getattr(p, attr)}
 
 
-def _beam_study_mismatches(d: BeamMember, study) -> bool:
-    """図面梁 d と計算書の1検討 study の配筋が不整合か（包絡は整合扱い）。"""
+def _beam_study_mismatch_attrs(d: BeamMember, study) -> list[str]:
+    """図面梁 d と計算書の1検討 study で不整合となる配筋フィールドの一覧。
+    包絡（図面の全断面1値が検討値を安全側に覆う）は整合扱い。"""
+    out: list[str] = []
     for attr in ("top", "bottom", "stirrup", "web"):
         ds = _aggregate_rebar(d, attr)
         ss = _study_rebar_set(study, attr)
         if ds and ss and ds != ss:
             if len(ds) == 1 and _rebar_envelope_covers(next(iter(ds)), ss):
                 continue
-            return True
-    return False
+            out.append(attr)
+    return out
 
 
 def _beam_study_locators(d: BeamMember, c: BeamMember, mark: str) -> Locator | None:
@@ -202,22 +204,31 @@ def _beam_study_locators(d: BeamMember, c: BeamMember, mark: str) -> Locator | N
 
     「配筋が整合している検討に赤枠が付き、不整合の検討に赤枠が付かない」
     誤誘導を防ぐため、検討単位で図面と突き合わせ、不整合の検討ブロック
-    のみ diff_bbox（赤枠）を設定する。全検討が整合（または位置情報の
-    対応が取れない）場合は None を返し、呼び出し側は従来動作を使う。
+    のみ diff_bbox（赤枠）を設定する。主検討はフィールド行の bbox が
+    取れているため、不整合フィールド行の包絡をタイトな赤枠にする。
+    追加検討は行単位の bbox が無いためブロック全体を赤枠にする。
+    全検討が整合（または位置情報の対応が取れない）場合は None を返し、
+    呼び出し側は従来動作を使う。
     """
     locs = [c.location] + list(c.extra_locations)
     if len(locs) != len(c.studies):
         return None
-    mism = [_beam_study_mismatches(d, st) for st in c.studies]
-    if not any(mism):
+    mism_attrs = [_beam_study_mismatch_attrs(d, st) for st in c.studies]
+    if not any(mism_attrs):
         return None
     built: list[Locator] = []
-    for lh, mm in zip(locs, mism):
+    for i, (lh, attrs) in enumerate(zip(locs, mism_attrs)):
         if lh is None or lh.bbox is None:
             continue
+        dbb = None
+        if attrs:
+            if i == 0:
+                rows = [c.field_bboxes[a] for a in attrs if a in c.field_bboxes]
+                dbb = _union_bboxes(rows) or _inset_bbox(lh.bbox)
+            else:
+                dbb = _inset_bbox(lh.bbox)
         built.append(Locator(
-            page=lh.page, bbox=lh.bbox,
-            diff_bbox=_inset_bbox(lh.bbox) if mm else None,
+            page=lh.page, bbox=lh.bbox, diff_bbox=dbb,
             search=mark, file_id=lh.file_id,
         ))
     if not built:

@@ -1,15 +1,48 @@
 """PDFハイライト画像レンダリング。
 
 UI のハイライト表示と全件レポートPDFの両方から利用する。
+
+高速化のポイント:
+- bbox 指定時はページ全体ではなく必要領域だけをクリップレンダリングする
+  （ページ全体を高解像度で描画してから切り抜くのに比べ大幅に速い）。
+- fitz のドキュメントを (path, mtime) 単位でキャッシュして開き直しを避ける。
+  fitz は同一ドキュメントへの並行アクセスに弱いため、レンダリングは
+  ロックで直列化する（クリップ描画は1回あたり数十msなので実用上問題ない）。
+- 枠（橙/赤）はPDFページへ描き込まず、レンダリング後の画像に描く
+  （キャッシュしたドキュメントを汚さないため）。
 """
 from __future__ import annotations
 
 import io
+import os
+import threading
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from PIL import Image
+from PIL import Image, ImageDraw
 from fastapi import HTTPException
+
+_ORANGE = (255, 128, 0)      # 部材全体枠
+_RED = (217, 26, 26)         # 差分箇所枠
+
+_render_lock = threading.Lock()
+_doc_cache: dict[tuple[str, float], fitz.Document] = {}
+_DOC_MAX = 4
+
+
+def _get_doc(pdf_path: Path) -> fitz.Document:
+    key = (str(pdf_path), os.path.getmtime(str(pdf_path)))
+    doc = _doc_cache.get(key)
+    if doc is None:
+        doc = fitz.open(str(pdf_path))
+        _doc_cache[key] = doc
+        while len(_doc_cache) > _DOC_MAX:
+            old_key = next(iter(k for k in _doc_cache if k != key))
+            try:
+                _doc_cache.pop(old_key).close()
+            except Exception:
+                pass
+    return doc
 
 
 def render_highlight_png(
@@ -29,41 +62,68 @@ def render_highlight_png(
                  複数フィールドの差分を同じ画像にまとめて表示できる。
     crop=True かつ bbox 指定時は該当箇所の周辺だけを切り出す
     """
+    if bbox is None:
+        # 検索語ハイライト等のフォールバック（低頻度）。ページへ描き込むため
+        # キャッシュを使わず毎回開く従来方式。
+        return _render_search_legacy(pdf_path, page, search=search, zoom=zoom)
+
+    render_zoom = max(zoom, 3.0) if crop else zoom
+    bx0, bx1 = sorted((bbox[0], bbox[2]))
+    by0, by1 = sorted((bbox[1], bbox[3]))
+    margin_pt = 44.0 / render_zoom  # 旧実装の 44px マージンをページ座標に換算
+
+    with _render_lock:
+        doc = _get_doc(pdf_path)
+        if page > doc.page_count:
+            raise HTTPException(400, f"ページ {page} はPDFの範囲外です (max {doc.page_count})")
+        pg = doc.load_page(page - 1)
+        if crop:
+            clip = fitz.Rect(bx0 - margin_pt, by0 - margin_pt,
+                             bx1 + margin_pt, by1 + margin_pt) & pg.rect
+        else:
+            clip = pg.rect
+        if clip.is_empty or clip.width < 1 or clip.height < 1:
+            clip = pg.rect
+        pix = pg.get_pixmap(matrix=fitz.Matrix(render_zoom, render_zoom),
+                            clip=clip, alpha=False)
+        im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+    draw = ImageDraw.Draw(im)
+
+    def _rect_px(r: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+        x0, x1 = sorted((r[0], r[2]))
+        y0, y1 = sorted((r[1], r[3]))
+        return ((x0 - clip.x0) * render_zoom, (y0 - clip.y0) * render_zoom,
+                (x1 - clip.x0) * render_zoom, (y1 - clip.y0) * render_zoom)
+
+    draw.rectangle(_rect_px((bx0, by0, bx1, by1)), outline=_ORANGE, width=2)
+    for db in diff_bboxes or ():
+        draw.rectangle(_rect_px(db), outline=_RED, width=2)
+
+    # 図面/計算書は実質白黒の線画＋橙/赤枠なので、適応パレット64色に
+    # 量子化するとファイルサイズが約1/3になる（見た目の劣化はない）。
+    # 画面表示のロードとレポートPDFのサイズ・生成時間の双方に効く。
+    im = im.quantize(colors=64, method=Image.MEDIANCUT)
+
+    buf = io.BytesIO()
+    im.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _render_search_legacy(pdf_path: Path, page: int, *, search: str | None,
+                          zoom: float) -> bytes:
+    """bbox が無い場合の従来レンダリング（検索語ハイライト・ページ全体）。"""
     doc = fitz.open(pdf_path)
     try:
         if page > doc.page_count:
             raise HTTPException(400, f"ページ {page} はPDFの範囲外です (max {doc.page_count})")
         pg = doc.load_page(page - 1)
-        rects: list[fitz.Rect] = []
-        if bbox is not None:
-            rects.append(fitz.Rect(*bbox))
-        elif search:
-            for r in pg.search_for(search):
-                rects.append(fitz.Rect(r.x0 - 10, r.y0 - 4, r.x1 + 80, r.y1 + 4))
         derotate = pg.derotation_matrix
-        for r in rects:
-            pg.draw_rect(r * derotate, color=(1, 0.5, 0), width=0.7)
-        for db in diff_bboxes or ():
-            pg.draw_rect(fitz.Rect(*db) * derotate, color=(0.85, 0.1, 0.1), width=0.8)
-
-        render_zoom = max(zoom, 3.0) if (crop and bbox is not None) else zoom
-        pix = pg.get_pixmap(matrix=fitz.Matrix(render_zoom, render_zoom), alpha=False)
-        png = pix.tobytes("png")
-
-        if crop and bbox is not None:
-            im = Image.open(io.BytesIO(png))
-            bx0, bx1 = sorted((bbox[0], bbox[2]))
-            by0, by1 = sorted((bbox[1], bbox[3]))
-            m = 44
-            box = (
-                max(0, int(bx0 * render_zoom) - m),
-                max(0, int(by0 * render_zoom) - m),
-                min(im.width, int(bx1 * render_zoom) + m),
-                min(im.height, int(by1 * render_zoom) + m),
-            )
-            buf = io.BytesIO()
-            im.crop(box).save(buf, format="PNG")
-            png = buf.getvalue()
-        return png
+        if search:
+            for r in pg.search_for(search):
+                rect = fitz.Rect(r.x0 - 10, r.y0 - 4, r.x1 + 80, r.y1 + 4)
+                pg.draw_rect(rect * derotate, color=(1, 0.5, 0), width=0.7)
+        pix = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+        return pix.tobytes("png")
     finally:
         doc.close()
