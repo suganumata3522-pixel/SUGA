@@ -130,11 +130,24 @@ def build_report(
     _add_cover(out, diffs, category, summary)
     targets = [d for d in diffs if include_match or _kind_str(d) != "一致"]
     total = len(targets)
+    # ハイライト画像を先に並列生成してキャッシュを温める。
+    # レンダリングは入力に対して決定的（結果はシリアル実行と同一）で、
+    # ページ組み立て時はキャッシュヒットになるため、生成時間だけが縮む。
+    import concurrent.futures
+    pre: dict[tuple[int, str], list] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        futs = {(id(d), side): ex.submit(_render_side_all, d, side)
+                for d in targets for side in ("drawing", "calc")}
+        for k, f in futs.items():
+            try:
+                pre[k] = f.result()
+            except Exception:
+                pass  # 失敗した分は _add_diff_page 内で従来どおり再試行される
     # 同一画像（継続ページで繰り返す図面側など）の再埋め込みを避けるため、
     # 画像バイト列のハッシュ → xref を文書単位でキャッシュする。
     img_xrefs: dict[str, int] = {}
     for index, d in enumerate(targets, start=1):
-        _add_diff_page(out, d, category, index, total, img_xrefs)
+        _add_diff_page(out, d, category, index, total, img_xrefs, pre)
     # deflate=True: 画像・コンテンツを圧縮して埋め込む（無圧縮だと画像1枚
     # あたり1MB超になりファイルが巨大化する）。
     pdf = out.tobytes(deflate=True, garbage=3)
@@ -184,15 +197,17 @@ def _add_cover(out: fitz.Document, diffs: list[Diff],
 
 def _add_diff_page(out: fitz.Document, diff: Diff, category: str,
                    index: int, total: int,
-                   img_xrefs: dict[str, int] | None = None) -> None:
+                   img_xrefs: dict[str, int] | None = None,
+                   pre: dict[tuple[int, str], list] | None = None) -> None:
     """差分1件分のページを追加する。
 
     計算書内に同符号で複数検討がある場合、計算書側は主検討＋各追加検討を
     それぞれ別ページ（継続ページ）に出力する。構造図側は各ページに同じ図を
     再掲する。1枚に収まらなくても全検討を出力する。
     """
-    draw_imgs = _render_side_all(diff, "drawing")
-    calc_imgs = _render_side_all(diff, "calc")
+    pre = pre or {}
+    draw_imgs = pre.get((id(diff), "drawing")) or _render_side_all(diff, "drawing")
+    calc_imgs = pre.get((id(diff), "calc")) or _render_side_all(diff, "calc")
     draw0 = draw_imgs[0] if draw_imgs else (None, None)
 
     # 計算書の検討数（最低1）ぶんのページを出す。

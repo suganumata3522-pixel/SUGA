@@ -204,7 +204,7 @@ export default function App() {
         </div>
         <div className="row">
           <button className="primary" onClick={handleCheck} disabled={busy || !canCheck}>
-            {busy ? "照合中... (20〜30秒)" : "整合チェック実行"}
+            {busy ? "照合中..." : "整合チェック実行"}
           </button>
           {(uploads.drawing.length > 0 || uploads.calc.length > 0) && (
             <button className="ghost" onClick={handleClear} disabled={busy}>すべて消去</button>
@@ -236,7 +236,7 @@ export default function App() {
               </label>
               <button className="secondary" onClick={() => handleReport("beam")}
                       disabled={reporting !== null}>
-                {reporting === "beam" ? "生成中... (10〜30秒)" : "小梁をPDF出力"}
+                {reporting === "beam" ? "生成中..." : "小梁をPDF出力"}
               </button>
             </div>
           </div>
@@ -276,7 +276,7 @@ export default function App() {
               </label>
               <button className="secondary" onClick={() => handleReport("slab")}
                       disabled={reporting !== null}>
-                {reporting === "slab" ? "生成中... (10〜30秒)" : "スラブをPDF出力"}
+                {reporting === "slab" ? "生成中..." : "スラブをPDF出力"}
               </button>
             </div>
           </div>

@@ -29,6 +29,14 @@ _render_lock = threading.Lock()
 _doc_cache: dict[tuple[str, float], fitz.Document] = {}
 _DOC_MAX = 4
 
+# 生成済みハイライトPNGのLRUキャッシュ。
+# レンダリングは入力（ファイル・ページ・枠座標・倍率）に対して決定的なので、
+# キャッシュヒットは再レンダリングと完全に同一のバイト列を返す。
+# 画面のPDF照合の再表示や、レポートの再生成が大幅に速くなる。
+_png_cache: dict[tuple, bytes] = {}
+_PNG_CACHE_MAX = 256
+_png_cache_lock = threading.Lock()
+
 
 def _get_doc(pdf_path: Path) -> fitz.Document:
     key = (str(pdf_path), os.path.getmtime(str(pdf_path)))
@@ -66,6 +74,19 @@ def render_highlight_png(
         # 検索語ハイライト等のフォールバック（低頻度）。ページへ描き込むため
         # キャッシュを使わず毎回開く従来方式。
         return _render_search_legacy(pdf_path, page, search=search, zoom=zoom)
+
+    # 決定的な入力に対する結果キャッシュ（同じ枠の再表示・レポート再生成用）
+    try:
+        _mt = os.path.getmtime(str(pdf_path))
+    except OSError:
+        _mt = 0.0
+    cache_key = (str(pdf_path), _mt, page, tuple(bbox),
+                 tuple(tuple(d) for d in (diff_bboxes or ())), zoom, crop)
+    with _png_cache_lock:
+        hit = _png_cache.pop(cache_key, None)
+        if hit is not None:
+            _png_cache[cache_key] = hit  # LRU: 末尾へ移動
+            return hit
 
     render_zoom = max(zoom, 3.0) if crop else zoom
     bx0, bx1 = sorted((bbox[0], bbox[2]))
@@ -107,7 +128,12 @@ def render_highlight_png(
 
     buf = io.BytesIO()
     im.save(buf, format="PNG")
-    return buf.getvalue()
+    png = buf.getvalue()
+    with _png_cache_lock:
+        _png_cache[cache_key] = png
+        while len(_png_cache) > _PNG_CACHE_MAX:
+            del _png_cache[next(iter(_png_cache))]
+    return png
 
 
 def _render_search_legacy(pdf_path: Path, page: int, *, search: str | None,

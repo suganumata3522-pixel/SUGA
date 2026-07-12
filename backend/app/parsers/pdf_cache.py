@@ -13,7 +13,9 @@ text/word に対して既知の誤コードポイントを正しい字へ置換�
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import pickle
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -327,6 +329,94 @@ def _filter_hidden_words(words: list[dict], hidden: list[tuple[float, float, str
 _MAX_ENTRIES = 6
 _cache: dict[tuple[str, float], list[PageData]] = {}
 
+# ---------------------------------------------------------------------------
+# 抽出結果のディスクキャッシュ
+# ---------------------------------------------------------------------------
+# 同じPDF（内容ハッシュが同じ）はアプリ再起動後・再アップロード後でも
+# 抽出をやり直さない。抽出は決定的なので、キャッシュの読み戻しは
+# 初回抽出と完全に同一の結果になる（精度への影響はゼロ）。
+#
+# 重要: 抽出ロジック（このファイルの処理）を変更したときにキャッシュが
+# 古い結果を返さないよう、キーに「バージョン文字列＋このソースの
+# ハッシュ」を含める。ソースが読めない環境（PyInstaller onefile 等）では
+# バージョン文字列のみで判定するため、抽出系を変更したら
+# _EXTRACT_VERSION を必ず上げること。
+_EXTRACT_VERSION = "v3"
+_DISK_CACHE_KEEP = 24  # 直近 N ファイル分だけ保持
+
+
+def _extract_salt() -> str:
+    salt = _EXTRACT_VERSION
+    try:
+        salt += "-" + hashlib.md5(Path(__file__).read_bytes()).hexdigest()[:8]
+    except Exception:
+        pass
+    return salt
+
+
+_SALT = _extract_salt()
+
+
+def _disk_cache_dir() -> Path | None:
+    if os.environ.get("YHG_NO_DISK_CACHE") == "1":
+        return None
+    try:
+        from ..config import UPLOAD_DIR
+        d = UPLOAD_DIR.parent / "parse_cache"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    except Exception:
+        return None
+
+
+def _disk_cache_path(content_md5: str) -> Path | None:
+    d = _disk_cache_dir()
+    if d is None:
+        return None
+    return d / f"{content_md5}-{_SALT}.pkl"
+
+
+def _disk_cache_load(p: Path | None) -> list[PageData] | None:
+    if p is None or not p.exists():
+        return None
+    try:
+        with open(p, "rb") as fh:
+            pages = pickle.load(fh)
+        # 型の軽い健全性チェック（壊れたキャッシュは捨てて再抽出）
+        if isinstance(pages, list) and all(isinstance(x, PageData) for x in pages):
+            try:
+                os.utime(p)  # LRU 用に触っておく
+            except OSError:
+                pass
+            return pages
+    except Exception:
+        pass
+    try:
+        p.unlink()
+    except OSError:
+        pass
+    return None
+
+
+def _disk_cache_save(p: Path | None, pages: list[PageData]) -> None:
+    if p is None:
+        return
+    try:
+        tmp = p.with_suffix(".tmp")
+        with open(tmp, "wb") as fh:
+            pickle.dump(pages, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, p)
+        # 古いエントリを間引く（更新時刻の新しい順に N 件残す）
+        entries = sorted(p.parent.glob("*.pkl"),
+                         key=lambda f: f.stat().st_mtime, reverse=True)
+        for old in entries[_DISK_CACHE_KEEP:]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    except Exception:
+        pass  # キャッシュ保存の失敗は無視（次回も抽出するだけ）
+
 # ページ並列抽出の設定。pdfplumber（pdfminer）の文字解釈は純Pythonで
 # 非常に重く、ページ間に依存が無いためプロセス並列で線形に近く速くなる。
 # 結果はページ単位で全く同じものを組み立て直すだけなので、逐次実行と
@@ -395,8 +485,35 @@ def _extract_all_pages(path: str) -> list[dict]:
     return _extract_pages_raw(path, indices, legacy_text)
 
 
+def _hidden_chars_map(path: str) -> dict[int, list[tuple[float, float, str]]]:
+    """全ページの隠し文字（白塗りで覆われたテキスト）をまとめて検出する。
+
+    pdfplumber の抽出（プロセス並列）と並行して別スレッドで走らせるため、
+    ページ番号 → 隠し文字リスト の辞書として返す。検出結果はページ単位で
+    従来の逐次検出と同一。
+    """
+    out: dict[int, list[tuple[float, float, str]]] = {}
+    try:
+        doc = fitz.open(path)
+    except Exception:
+        return out
+    try:
+        for i in range(doc.page_count):
+            hc = _hidden_chars(doc.load_page(i))
+            if hc:
+                out[i + 1] = hc
+    finally:
+        doc.close()
+    return out
+
+
 def get_pages(pdf_path: Path | str) -> list[PageData]:
-    """PDFの全ページの抽出結果を返す。同一ファイルなら 2 回目以降はキャッシュを返す。"""
+    """PDFの全ページの抽出結果を返す。同一ファイルなら 2 回目以降はキャッシュを返す。
+
+    さらに内容ハッシュをキーにしたディスクキャッシュを持ち、アプリ再起動後や
+    再アップロード後でも同じPDFなら抽出をやり直さない（抽出は決定的なので
+    結果は初回抽出と同一）。
+    """
     path = str(pdf_path)
     try:
         mtime = os.path.getmtime(path)
@@ -408,13 +525,31 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
     if cached is not None:
         return cached
 
-    pages: list[PageData] = []
-    # 白塗りで隠されたテキストの検出用に PyMuPDF でも同じファイルを開く
-    try:
-        fz_doc = fitz.open(path)
-    except Exception:
-        fz_doc = None
-    for entry in _extract_all_pages(path):
+    # ディスクキャッシュ（内容ハッシュ一致なら即返す）
+    disk_path = None
+    if os.environ.get("YHG_LEGACY_TEXT") != "1":  # 検証モードはキャッシュ対象外
+        try:
+            content_md5 = hashlib.md5(Path(path).read_bytes()).hexdigest()
+            disk_path = _disk_cache_path(content_md5)
+        except Exception:
+            disk_path = None
+        pages = _disk_cache_load(disk_path)
+        if pages is not None:
+            _cache[key] = pages
+            while len(_cache) > _MAX_ENTRIES:
+                del _cache[next(iter(_cache))]
+            return pages
+
+    # 白塗り隠しテキストの検出（PyMuPDF）は、pdfplumber の抽出と依存が
+    # 無いため別スレッドで並行実行する（結果は逐次実行と同一）。
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as tex:
+        hidden_fut = tex.submit(_hidden_chars_map, path)
+        entries = _extract_all_pages(path)
+        hidden_map = hidden_fut.result()
+
+    pages = []
+    for entry in entries:
         i = entry["index"]
         raw_words = entry["words"]
         # extract_text() は非常に重いため、抽出済みの語から等価な
@@ -426,10 +561,9 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
         else:
             raw_text = _compose_text_from_words(raw_words)
         # 白塗り矩形で覆われた（見えない）テキストを除外
-        if fz_doc is not None and i <= fz_doc.page_count:
-            hidden = _hidden_chars(fz_doc.load_page(i - 1))
-            if hidden:
-                raw_words = _filter_hidden_words(raw_words, hidden)
+        hidden = hidden_map.get(i)
+        if hidden:
+            raw_words = _filter_hidden_words(raw_words, hidden)
         # CID不具合の正規化＋縦書き数字の逆順補正を適用
         for w in raw_words:
             w["text"] = _fix_reversed_digits(normalize_pdf_text(w["text"]))
@@ -452,8 +586,7 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
             height=entry["height"],
         ))
 
-    if fz_doc is not None:
-        fz_doc.close()
+    _disk_cache_save(disk_path, pages)
     _cache[key] = pages
     while len(_cache) > _MAX_ENTRIES:
         oldest = next(iter(_cache))
