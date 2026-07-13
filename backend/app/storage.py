@@ -85,12 +85,36 @@ def find_path(file_id: str) -> Path | None:
 def delete_upload(file_id: str) -> bool:
     p = find_path(file_id)
     if p and p.exists():
-        p.unlink()
+        _unlink_releasing(p)
         return True
     return False
 
 
+def _unlink_releasing(p: Path) -> None:
+    """レンダリングキャッシュが開いているPDFを閉じてから削除する。
+
+    Windows では開いているファイルを削除できないため、削除前に
+    pdf_render 側で開いたままの fitz ドキュメントを必ず解放する。
+    """
+    from .pdf_render import release_docs
+    release_docs(p)
+    try:
+        p.unlink()
+    except PermissionError:
+        # 念のため全ドキュメントを解放してもう一度だけ試す
+        release_docs(None)
+        p.unlink()
+
+
 def clear_all() -> None:
+    from .pdf_render import release_docs
+    release_docs(None)  # 開いているPDFを全て閉じてから消す（Windowsのロック対策）
+    errors: list[str] = []
     for r in ROLES:
         for f in _role_dir(r).glob(f"*{_SEP}*"):
-            f.unlink()
+            try:
+                f.unlink()
+            except OSError as e:
+                errors.append(f"{f.name}: {e}")
+    if errors:
+        raise OSError("削除できないファイルがあります: " + " / ".join(errors))

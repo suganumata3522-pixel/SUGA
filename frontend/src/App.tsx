@@ -76,13 +76,23 @@ export default function App() {
   };
 
   const handleDelete = async (id: string) => {
-    await deleteUpload(id);
+    setError(null);
+    try {
+      await deleteUpload(id);
+    } catch (e) {
+      setError(String(e));
+    }
     await refresh();
   };
 
   const handleClear = async () => {
-    await clearUploads();
-    setResult(null);
+    setError(null);
+    try {
+      await clearUploads();
+      setResult(null);
+    } catch (e) {
+      setError(String(e));
+    }
     await refresh();
   };
 

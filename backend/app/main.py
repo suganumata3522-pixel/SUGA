@@ -69,14 +69,21 @@ def upload(role: str = Form(...), files: list[UploadFile] = File(...)) -> list[d
 
 @app.delete("/api/uploads/{file_id}")
 def remove_upload(file_id: str) -> dict:
-    if not delete_upload(file_id):
+    try:
+        deleted = delete_upload(file_id)
+    except OSError as e:
+        raise HTTPException(500, f"ファイルを削除できません（使用中の可能性）: {e}")
+    if not deleted:
         raise HTTPException(404, "ファイルが見つかりません")
     return {"ok": True}
 
 
 @app.post("/api/uploads/clear")
 def clear_uploads() -> dict:
-    clear_all()
+    try:
+        clear_all()
+    except OSError as e:
+        raise HTTPException(500, str(e))
     return {"ok": True}
 
 

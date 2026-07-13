@@ -38,6 +38,29 @@ _PNG_CACHE_MAX = 256
 _png_cache_lock = threading.Lock()
 
 
+def release_docs(path: str | Path | None = None) -> None:
+    """キャッシュ中の fitz ドキュメントを閉じ、関連するPNGキャッシュを捨てる。
+
+    Windows では開いているファイルを削除できないため、アップロードPDFを
+    削除（個別削除・すべて消去）する前に必ず呼ぶこと。path=None で全解放。
+    """
+    p = str(path) if path is not None else None
+    with _render_lock:
+        for key in list(_doc_cache):
+            if p is None or key[0] == p:
+                try:
+                    _doc_cache.pop(key).close()
+                except Exception:
+                    _doc_cache.pop(key, None)
+    with _png_cache_lock:
+        if p is None:
+            _png_cache.clear()
+        else:
+            for k in list(_png_cache):
+                if k[0] == p:
+                    del _png_cache[k]
+
+
 def _get_doc(pdf_path: Path) -> fitz.Document:
     key = (str(pdf_path), os.path.getmtime(str(pdf_path)))
     doc = _doc_cache.get(key)

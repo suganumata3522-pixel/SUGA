@@ -103,11 +103,21 @@ export async function uploadFiles(role: "drawing" | "calc", files: File[]): Prom
 
 export async function deleteUpload(id: string): Promise<void> {
   const r = await fetch(`${BASE}/api/uploads/${id}`, { method: "DELETE" });
-  if (!r.ok) throw new Error("削除に失敗しました");
+  if (!r.ok) throw new Error(await errText(r, "削除に失敗しました"));
 }
 
 export async function clearUploads(): Promise<void> {
-  await fetch(`${BASE}/api/uploads/clear`, { method: "POST" });
+  const r = await fetch(`${BASE}/api/uploads/clear`, { method: "POST" });
+  if (!r.ok) throw new Error(await errText(r, "すべて消去に失敗しました"));
+}
+
+async function errText(r: Response, fallback: string): Promise<string> {
+  try {
+    const t = await r.text();
+    return t ? `${fallback}: ${t.slice(0, 300)}` : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function runCheck(): Promise<CheckResult> {
