@@ -470,7 +470,7 @@ function DiffTable({
             <td className={`diff-kind ${KIND_COLORS[d.kind] ?? ""}`}>{d.kind}</td>
             <td>
               <b>{d.mark}</b>
-              {d.fields.length === 0 && (d.drawing_loc?.file_id || d.calc_loc?.file_id) && (
+              {(d.drawing_loc?.file_id || d.calc_loc?.file_id) && (
                 <div className="row" style={{ marginTop: 4 }}>
                   <button className="link" onClick={() => onCompare(d.mark, d.drawing_loc, d.calc_loc)}>
                     PDFで照合
@@ -484,13 +484,6 @@ function DiffTable({
               {d.fields.map((f, j) => (
                 <div key={j} className="field-diff">
                   <code>{f.field}</code>: 図 <b>{f.drawing_value ?? "—"}</b> / 計算 <b>{f.calc_value ?? "—"}</b>
-                  <span className="field-actions">
-                    {(f.drawing_loc?.file_id || f.calc_loc?.file_id) && (
-                      <button className="link" onClick={() => onCompare(d.mark, f.drawing_loc, f.calc_loc)}>
-                        PDFで照合
-                      </button>
-                    )}
-                  </span>
                 </div>
               ))}
             </td>

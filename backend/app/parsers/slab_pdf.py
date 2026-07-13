@@ -296,10 +296,6 @@ _RE_SLAB_PRIMARY_ANCHOR = re.compile(rf"{_LX}|\bLx\s*=\s*\d+\s*\(cm\)|ｔ\s*=\s*
 # Super Build/RC2次部材 のスラブ厚（cm単位、全角ｔ）
 _RE_T_CM = re.compile(r"ｔ\s*=\s*(\d+)\s*\(cm\)")
 
-# 補足・派生検討のブロック番号 "(34')" を検出する（プライム付き）。
-# プライム文字は ASCII ' / 右シングルクォート ’ / プライム ′ を許容。
-_RE_PRIME_BLOCK = re.compile(r"^\s*[\(（]\s*\d+\s*['’′]\s*[\)）]")
-
 # Union System SS7 形式のスラブ1行: "S1← [ S1 ] [RSL X2 Y2 X3 Y3] 反転 短辺上 D13@200 ..."
 # 行先頭の "S1←" の符号が図面に反映される「型符号」。"[ S1 ]" は計算上の ID で図面とは別。
 _RE_SS7_SLAB_TYPE = re.compile(r"^\s*(C?S\d+[A-Za-z]?)\s*[←⇐]")
@@ -405,7 +401,6 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
             if _RE_SLAB_ANCHOR.search(line) and not _only_t_mm_continuation:
                 mark = note = None
                 header_bbox = None
-                supplementary = False
                 # 直前の非空行を数行遡って符号を含む見出しを探す
                 # （"自主訂正No.X" 等の注記が間に挟まることがある）
                 seen_non_empty = 0
@@ -418,11 +413,6 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                     if cand_mark:
                         mark, note = cand_mark, cand_note
                         header_bbox = _span_bbox(line_groups[back])
-                        # ブロック番号にプライム（"(34')"）が付く検討は、主検討
-                        # （"(34)"）に対する補足・派生検討（先端庇など）。主検討の
-                        # 配筋が代表値であり、補足検討の配筋を集約すると過剰な
-                        # 配筋値が混入するため、補足検討フラグを立てる。
-                        supplementary = bool(_RE_PRIME_BLOCK.match(prev_line))
                         break
                     if seen_non_empty >= 6:
                         break
@@ -469,7 +459,6 @@ def parse_calc_slabs(pdf_path: Path) -> SlabSet:
                     # 左端が欠けるケース（CS8）でも、部材全体枠がブロック本体の
                     # 左端まで届くように envelope に含める。
                     "anchor_bbox": _span_bbox(lw),
-                    "supplementary": supplementary,
                 }
                 tm = _RE_T.search(line)
                 if tm:
@@ -671,37 +660,9 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
         # 1つでも異なる場合は、安全側か否かに関わらず needs_review を立てて
         # 整合チェックで「要目視確認」を発出する（断面積による安全側判定は
         # 行わない＝補足検討に相違があれば必ず目視確認とする）。
-        if cur.get("supplementary"):
-            diff_vals = [v for v in cur["top"] if v not in existing.top_rebar]
-            diff_vals += [v for v in cur["bottom"] if v not in existing.bottom_rebar]
-            if diff_vals and not existing.needs_review:
-                existing.needs_review = True
-                existing.review_note = (
-                    "補足検討（プライム付ブロック）の配筋が主検討と異なります"
-                    f"（補足: {' / '.join(dict.fromkeys(diff_vals))}）。"
-                    "計算書の各検討と図面を確認してください。"
-                )
-            # 集約はしないが、検討ブロックとしては記録して PDF照合・
-            # 一括出力に全検討が表示されるようにする（CS8 のような
-            # プライム付き補足検討が抽出されない問題への対応）。
-            study = cur.get("_study")
-            if study is None:
-                env_s = _bbox_union([header, anchor, *bboxes.values()])
-                study = SlabStudy(
-                    location=LocationHint(page=cur["page"], bbox=env_s),
-                    note=cur["note"] or None,
-                )
-                cur["_study"] = study
-                existing.studies.append(study)
-                if study.location is not None:
-                    existing.extra_locations.append(study.location)
-            study.top_rebar = list(cur["top"])
-            study.bottom_rebar = list(cur["bottom"])
-            study.field_bboxes = dict(bboxes)
-            env_s = _bbox_union([header, anchor, *bboxes.values()])
-            if env_s is not None and study.location is not None:
-                study.location.bbox = env_s
-            return
+        # プライム付きブロック "(34')" も通常ブロックと同じ「並列の検討」
+        # として扱う（同符号を複数個所で検討しているだけで、主従関係はない）。
+        # 検討ごとの図面との整合判定は compare_slabs の複数検討ロジックが行う。
         # 検討ブロック単位で study を記録する。_finalize_calc_slab は1ブロック
         # につき複数回（アンカー/上端/下端）呼ばれるため、cur["_study"] で
         # 同一ブロックの study を使い回し、新規ブロックのときだけ追加する。

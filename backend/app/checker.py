@@ -179,6 +179,30 @@ def _union_bboxes(bbs: list[tuple[float, float, float, float]]) -> tuple[float, 
             max(b[2] for b in bbs), max(b[3] for b in bbs))
 
 
+def _with_field_envelope(loc: Locator | None, fields: list[FieldDiff],
+                         side: str) -> Locator | None:
+    """部材レベルの Locator に、フィールド差分の赤枠を1つに包絡した
+    diff_bbox を持たせたコピーを返す。
+
+    PDF照合は符号ごとに1つ（部材レベルの Locator）で開き、複数フィールド
+    （上端筋・下端筋・STP 等）の差分は別々の赤枠ではなく1つの枠で包絡する。
+    別ページ・別ファイルのフィールド枠は混ぜない。
+    """
+    if loc is None:
+        return None
+    boxes: list[tuple[float, float, float, float]] = []
+    for f in fields:
+        fl = f.drawing_loc if side == "drawing" else f.calc_loc
+        if (fl and fl.diff_bbox and fl.page == loc.page
+                and fl.file_id == loc.file_id and fl.diff_bbox not in boxes):
+            boxes.append(fl.diff_bbox)
+    if not boxes:
+        return loc
+    out = loc.model_copy()
+    out.diff_bbox = _union_bboxes(boxes)
+    return out
+
+
 def _study_rebar_set(study, attr: str) -> set[str]:
     """計算書の1検討ブロック内の指定配筋値を集合化する。"""
     return {getattr(p, attr).replace(" ", "") for p in study if getattr(p, attr)}
@@ -288,13 +312,15 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
             continue
         # B 比較（両方に値がある場合のみ）
         if d.section.B is not None and c.section.B is not None and d.section.B != c.section.B:
+            b_fields = [FieldDiff(
+                field="B", drawing_value=str(d.section.B), calc_value=str(c.section.B),
+                drawing_loc=_field_loc(d, "B"), calc_loc=_field_loc(c, "B"),
+            )]
             diffs.append(Diff(
                 kind=DiffKind.SECTION_B_MISMATCH, mark=mark, note=c.note,
-                fields=[FieldDiff(
-                    field="B", drawing_value=str(d.section.B), calc_value=str(c.section.B),
-                    drawing_loc=_field_loc(d, "B"), calc_loc=_field_loc(c, "B"),
-                )],
-                drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
+                fields=b_fields,
+                drawing_loc=_with_field_envelope(_drawing_loc(d), b_fields, "drawing"),
+                calc_loc=_with_field_envelope(_calc_loc(c), b_fields, "calc"),
             ))
         # 配筋比較
         # 各フィールドを以下の3カテゴリに分類:
@@ -415,12 +441,14 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
             diffs.append(Diff(
                 kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
                 note=note_text,
-                drawing_loc=_drawing_loc(d), calc_loc=calc_locator,
+                drawing_loc=_with_field_envelope(_drawing_loc(d), rebar_fields, "drawing"),
+                calc_loc=_with_field_envelope(calc_locator, rebar_fields, "calc"),
             ))
         elif rebar_mismatch_fields:
             diffs.append(Diff(
                 kind=DiffKind.REBAR_MISMATCH, mark=mark, fields=rebar_mismatch_fields, note=c.note,
-                drawing_loc=_drawing_loc(d), calc_loc=_calc_loc(c),
+                drawing_loc=_with_field_envelope(_drawing_loc(d), rebar_mismatch_fields, "drawing"),
+                calc_loc=_with_field_envelope(_calc_loc(c), rebar_mismatch_fields, "calc"),
             ))
         # 不整合が1件も出なければ「一致」
         if len(diffs) == before:
@@ -525,13 +553,15 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
             lo, hi = d_rng
             if not (lo <= c.thickness <= hi):
                 d_disp = d.thickness_raw or str(d.thickness)
+                t_fields = [FieldDiff(
+                    field="スラブ厚", drawing_value=d_disp, calc_value=f"{c.thickness}",
+                    drawing_loc=_slab_loc(d, "thickness"), calc_loc=_slab_loc(c, "thickness"),
+                )]
                 diffs.append(Diff(
                     kind=DiffKind.SLAB_THICKNESS_MISMATCH, mark=mark,
-                    fields=[FieldDiff(
-                        field="スラブ厚", drawing_value=d_disp, calc_value=f"{c.thickness}",
-                        drawing_loc=_slab_loc(d, "thickness"), calc_loc=_slab_loc(c, "thickness"),
-                    )],
-                    drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+                    fields=t_fields,
+                    drawing_loc=_with_field_envelope(_slab_loc(d), t_fields, "drawing"),
+                    calc_loc=_with_field_envelope(_slab_loc(c), t_fields, "calc"),
                 ))
 
         # 配筋（集合で一致判定、表示は計算書/構造図の出現順を保つ）
@@ -580,17 +610,16 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
             primary_loc.extra_locs = built[1:]
             return primary_loc
 
-        # 補足検討（"(34')"）の配筋が主検討で覆われていない場合は、
-        # 配筋不一致ではなく「要目視確認」とする（計算書の各検討要確認）。
-        # 補足検討も含む全検討を並べ、不整合の検討に赤枠を付ける。
         if c.needs_review:
+            # （現状このフラグを立てるパーサ経路は無いが、将来用に維持）
             calc_locator = _study_calc_locator() or _slab_loc(c)
             for f in rebar_fields:
                 f.calc_loc = calc_locator
             diffs.append(Diff(
                 kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
                 note=c.review_note,
-                drawing_loc=_slab_loc(d), calc_loc=calc_locator,
+                drawing_loc=_with_field_envelope(_slab_loc(d), rebar_fields, "drawing"),
+                calc_loc=calc_locator,
             ))
         elif multi_study:
             # 各検討と図面を突き合わせ、整合する検討数を数える。
@@ -601,7 +630,9 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                 if rebar_fields:
                     diffs.append(Diff(
                         kind=DiffKind.SLAB_REBAR_MISMATCH, mark=mark, fields=rebar_fields,
-                        drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+                        drawing_loc=_with_field_envelope(_slab_loc(d), rebar_fields, "drawing"),
+                        calc_loc=_study_calc_locator() or _with_field_envelope(
+                            _slab_loc(c), rebar_fields, "calc"),
                     ))
             elif matched < n:
                 # 一部の検討のみ整合 → 要目視確認（全検討を並べて確認できるよう
@@ -616,13 +647,15 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                 diffs.append(Diff(
                     kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
                     note=note,
-                    drawing_loc=_slab_loc(d), calc_loc=calc_locator,
+                    drawing_loc=_with_field_envelope(_slab_loc(d), rebar_fields, "drawing"),
+                    calc_loc=calc_locator,
                 ))
             # matched == n（全検討が整合）は差分なし＝一致扱い（下の len==before で MATCH）
         elif rebar_fields:
             diffs.append(Diff(
                 kind=DiffKind.SLAB_REBAR_MISMATCH, mark=mark, fields=rebar_fields,
-                drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+                drawing_loc=_with_field_envelope(_slab_loc(d), rebar_fields, "drawing"),
+                calc_loc=_with_field_envelope(_slab_loc(c), rebar_fields, "calc"),
             ))
         # 不整合が1件も出なければ「一致」
         if len(diffs) == before:
