@@ -553,13 +553,44 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                    if _ordered_unique(st.top_rebar) or _ordered_unique(st.bottom_rebar)]
         multi_study = len(studies) >= 2
 
+        def _study_calc_locator() -> Locator | None:
+            """全検討を並べ、図面と不整合の検討ブロックに赤枠を付けた
+            calc 側 Locator を組み立てる。赤枠は不整合フィールドの配筋行
+            （取れなければブロック全体）を対象にする。"""
+            built: list[Locator] = []
+            for st in studies:
+                lh = st.location
+                if lh is None or lh.bbox is None:
+                    continue
+                dbb = None
+                if not _slab_study_matches(d, st):
+                    fb = getattr(st, "field_bboxes", {}) or {}
+                    rows = []
+                    for attr, key in (("top_rebar", "top"), ("bottom_rebar", "bottom")):
+                        ds = set(_ordered_unique(getattr(d, attr)))
+                        ss = set(_ordered_unique(getattr(st, attr)))
+                        if ds and ss and ds != ss and key in fb:
+                            rows.append(fb[key])
+                    dbb = _union_bboxes(rows) or _inset_bbox(lh.bbox)
+                built.append(Locator(page=lh.page, bbox=lh.bbox, diff_bbox=dbb,
+                                     search=mark, file_id=lh.file_id))
+            if not built:
+                return None
+            primary_loc = built[0]
+            primary_loc.extra_locs = built[1:]
+            return primary_loc
+
         # 補足検討（"(34')"）の配筋が主検討で覆われていない場合は、
         # 配筋不一致ではなく「要目視確認」とする（計算書の各検討要確認）。
+        # 補足検討も含む全検討を並べ、不整合の検討に赤枠を付ける。
         if c.needs_review:
+            calc_locator = _study_calc_locator() or _slab_loc(c)
+            for f in rebar_fields:
+                f.calc_loc = calc_locator
             diffs.append(Diff(
                 kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
                 note=c.review_note,
-                drawing_loc=_slab_loc(d), calc_loc=_slab_loc(c),
+                drawing_loc=_slab_loc(d), calc_loc=calc_locator,
             ))
         elif multi_study:
             # 各検討と図面を突き合わせ、整合する検討数を数える。
@@ -574,37 +605,14 @@ def compare_slabs(drawing: SlabSet, calc: SlabSet) -> list[Diff]:
                     ))
             elif matched < n:
                 # 一部の検討のみ整合 → 要目視確認（全検討を並べて確認できるよう
-                # calc_loc に全検討の位置を含める）。図面と不整合の検討ブロック
-                # には赤枠（diff_bbox）を付ける。赤枠は不整合フィールドの配筋行
-                # （取れなければブロック全体）を対象にする。
+                # calc_loc に全検討の位置を含める）。
                 note = (
                     f"計算書に同符号で {n} 件の検討があり、うち {matched} 件は図面と整合、"
                     f"{n - matched} 件は不整合です。各検討を確認してください。"
                 )
-                built: list[Locator] = []
-                for st in studies:
-                    lh = st.location
-                    if lh is None or lh.bbox is None:
-                        continue
-                    dbb = None
-                    if not _slab_study_matches(d, st):
-                        fb = getattr(st, "field_bboxes", {}) or {}
-                        rows = []
-                        for attr, key in (("top_rebar", "top"), ("bottom_rebar", "bottom")):
-                            ds = set(_ordered_unique(getattr(d, attr)))
-                            ss = set(_ordered_unique(getattr(st, attr)))
-                            if ds and ss and ds != ss and key in fb:
-                                rows.append(fb[key])
-                        dbb = _union_bboxes(rows) or _inset_bbox(lh.bbox)
-                    built.append(Locator(page=lh.page, bbox=lh.bbox, diff_bbox=dbb,
-                                         search=mark, file_id=lh.file_id))
-                calc_locator = _slab_loc(c)
-                if built:
-                    primary_loc = built[0]
-                    primary_loc.extra_locs = built[1:]
-                    calc_locator = primary_loc
-                    for f in rebar_fields:
-                        f.calc_loc = calc_locator
+                calc_locator = _study_calc_locator() or _slab_loc(c)
+                for f in rebar_fields:
+                    f.calc_loc = calc_locator
                 diffs.append(Diff(
                     kind=DiffKind.NEEDS_REVIEW, mark=mark, fields=rebar_fields,
                     note=note,

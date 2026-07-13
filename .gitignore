@@ -19,6 +19,7 @@ dist/
 *.sqlite-journal
 backend/data/
 backend/uploads/
+backend/parse_cache/
 YHG-data/
 YHG-Sleeve-data/
 

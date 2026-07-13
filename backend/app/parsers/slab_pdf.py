@@ -681,6 +681,26 @@ def _finalize_calc_slab(cur: dict, slabs: dict[str, SlabMember]) -> None:
                     f"（補足: {' / '.join(dict.fromkeys(diff_vals))}）。"
                     "計算書の各検討と図面を確認してください。"
                 )
+            # 集約はしないが、検討ブロックとしては記録して PDF照合・
+            # 一括出力に全検討が表示されるようにする（CS8 のような
+            # プライム付き補足検討が抽出されない問題への対応）。
+            study = cur.get("_study")
+            if study is None:
+                env_s = _bbox_union([header, anchor, *bboxes.values()])
+                study = SlabStudy(
+                    location=LocationHint(page=cur["page"], bbox=env_s),
+                    note=cur["note"] or None,
+                )
+                cur["_study"] = study
+                existing.studies.append(study)
+                if study.location is not None:
+                    existing.extra_locations.append(study.location)
+            study.top_rebar = list(cur["top"])
+            study.bottom_rebar = list(cur["bottom"])
+            study.field_bboxes = dict(bboxes)
+            env_s = _bbox_union([header, anchor, *bboxes.values()])
+            if env_s is not None and study.location is not None:
+                study.location.bbox = env_s
             return
         # 検討ブロック単位で study を記録する。_finalize_calc_slab は1ブロック
         # につき複数回（アンカー/上端/下端）呼ばれるため、cur["_study"] で
