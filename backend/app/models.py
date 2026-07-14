@@ -52,9 +52,12 @@ class BeamMember(BaseModel):
     location: Optional[LocationHint] = None
     # 同一符号が計算書内の別 検討 ブロックにも登場する場合、追加の
     # 位置情報と各 検討 の断面寸法をここに保持する。
-    # extra_locations[i] と extra_sections[i] は対応する。
+    # extra_locations[i] と extra_sections[i] / extra_field_bboxes[i] は対応する。
     extra_locations: list[LocationHint] = Field(default_factory=list)
     extra_sections: list[Section] = Field(default_factory=list)
+    # 追加検討ブロック内のフィールド行 bbox（top/bottom/stirrup/B）。
+    # 不整合の検討の該当行だけを赤枠で囲うために使う。
+    extra_field_bboxes: list[dict[str, tuple[float, float, float, float]]] = Field(default_factory=list)
     # 検討単位の位置リスト。studies[i] が i 番目の 検討 のポジション群。
     # 整合判定で「全断面（検討内が均一）か」「検討間で値が違うか」を
     # 区別するために使用する。positions と内容は重複する（互換用）が、

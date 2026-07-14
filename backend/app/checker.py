@@ -246,11 +246,16 @@ def _beam_study_locators(d: BeamMember, c: BeamMember, mark: str) -> Locator | N
             continue
         dbb = None
         if attrs:
+            # 不整合フィールドの行 bbox を包絡した赤枠にする。
+            # 主検討は member.field_bboxes、追加検討は extra_field_bboxes[i-1]。
+            # 行 bbox が取れないブロックはブロック全体を赤枠にする。
             if i == 0:
-                rows = [c.field_bboxes[a] for a in attrs if a in c.field_bboxes]
-                dbb = _union_bboxes(rows) or _inset_bbox(lh.bbox)
+                fb = c.field_bboxes or {}
             else:
-                dbb = _inset_bbox(lh.bbox)
+                efb = getattr(c, "extra_field_bboxes", []) or []
+                fb = efb[i - 1] if i - 1 < len(efb) else {}
+            rows = [fb[a] for a in attrs if a in fb]
+            dbb = _union_bboxes(rows) or _inset_bbox(lh.bbox)
         built.append(Locator(
             page=lh.page, bbox=lh.bbox, diff_bbox=dbb,
             search=mark, file_id=lh.file_id,

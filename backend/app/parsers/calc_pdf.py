@@ -346,6 +346,7 @@ class StructureSuitePdfParser(Parser):
             existing.studies.append(list(positions))
             existing.extra_locations.append(LocationHint(page=page_idx, bbox=bbox))
             existing.extra_sections.append(Section(B=B, D=D))
+            existing.extra_field_bboxes.append(dict(field_bboxes))
             return
 
         members.append(BeamMember(
@@ -590,8 +591,10 @@ class StructureSuitePdfParser(Parser):
                     existing.positions.extend(positions)
                     existing.studies.append(list(positions))
                     # 別 検討 ブロックの位置情報と断面寸法を追加
+                    # （bbox / フィールド行 bbox は _attach_field_bboxes が後で埋める）
                     existing.extra_locations.append(LocationHint(page=page_idx))
                     existing.extra_sections.append(Section(B=B, D=D))
+                    existing.extra_field_bboxes.append({})
 
 
 def _group_lines(words: list[dict], tol: float = 2.0) -> list[tuple[float, list[dict]]]:
@@ -732,13 +735,17 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
                     target.location = LocationHint(page=page_idx, bbox=bbox)
                     continue
                 # 主検討が既に確定済みの場合、このページに対応する別検討
-                # (extra_locations) の bbox をここで補完する。PDF照合で全ての
-                # 検討ブロックを表示できるようにする。
+                # (extra_locations) の bbox とフィールド行 bbox をここで補完する。
+                # PDF照合で全ての検討ブロックを表示し、不整合の検討の該当行を
+                # 赤枠で囲えるようにする。
                 member = next((m for m in members if m.mark == mark_text), None)
                 if member is not None:
-                    for loc in member.extra_locations:
+                    for li, loc in enumerate(member.extra_locations):
                         if loc.page == page_idx and loc.bbox is None:
                             loc.bbox = bbox
+                            while len(member.extra_field_bboxes) < len(member.extra_locations):
+                                member.extra_field_bboxes.append({})
+                            member.extra_field_bboxes[li] = dict(field_bboxes)
                             break
 
 
