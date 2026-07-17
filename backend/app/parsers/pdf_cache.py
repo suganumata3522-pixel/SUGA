@@ -17,7 +17,7 @@ import hashlib
 import os
 import pickle
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import fitz  # PyMuPDF: 白塗りで隠されたテキストの検出に使う
@@ -31,6 +31,11 @@ class PageData:
     words: list[dict]          # extract_words(keep_blank_chars=False) の結果
     width: float
     height: float
+    # テキストの上に貼られた大きなラスタ画像の矩形（上貼り編集の痕跡）。
+    # PDF編集ソフトで表の一部を画像として貼り直すと、下に古いテキストが
+    # 残ったまま見た目だけが変わる。抽出は下の古いテキストを読むため、
+    # この領域に掛かる部材は「要目視確認」にする。
+    overlay_rects: list[tuple[float, float, float, float]] = field(default_factory=list)
 
 
 # PDF CID マッピング不具合で出る誤コードポイントを正しい字へ戻す。
@@ -341,7 +346,7 @@ _cache: dict[tuple[str, float], list[PageData]] = {}
 # ハッシュ」を含める。ソースが読めない環境（PyInstaller onefile 等）では
 # バージョン文字列のみで判定するため、抽出系を変更したら
 # _EXTRACT_VERSION を必ず上げること。
-_EXTRACT_VERSION = "v3"
+_EXTRACT_VERSION = "v5"
 _DISK_CACHE_KEEP = 24  # 直近 N ファイル分だけ保持
 
 
@@ -485,26 +490,65 @@ def _extract_all_pages(path: str) -> list[dict]:
     return _extract_pages_raw(path, indices, legacy_text)
 
 
-def _hidden_chars_map(path: str) -> dict[int, list[tuple[float, float, str]]]:
-    """全ページの隠し文字（白塗りで覆われたテキスト）をまとめて検出する。
+def _overlay_image_rects(fz_page) -> list[tuple[float, float, float, float]]:
+    """テキストの上に「後から」描かれた大きなラスタ画像の矩形を検出する。
+
+    PDF編集ソフトで計算書の一部を修正すると、修正後の表が画像として
+    上貼りされ、下に修正前のテキストが残ることがある。テキスト抽出は
+    下の古いテキストを読むため、見た目と抽出値が食い違い得る。
+
+    描画順（get_bboxlog）を見て、先に描かれたテキストに重なる大きな
+    画像のみを対象とする。背景スキャン（画像が先、テキストが後）や
+    小さなスタンプ・ロゴ画像は対象にしない。
+    """
+    _MIN_AREA = 15000.0  # 検討ブロック級の画像のみ（スタンプ等は除外）
+    out: list[tuple[float, float, float, float]] = []
+    try:
+        text_rects: list[fitz.Rect] = []
+        for op, rect in fz_page.get_bboxlog():
+            r = fitz.Rect(rect)
+            if op in ("fill-text", "stroke-text", "clip-text", "ignore-text"):
+                if not r.is_empty:
+                    text_rects.append(r)
+            elif op == "fill-image":
+                if r.width * r.height < _MIN_AREA:
+                    continue
+                if any(r.intersects(t) for t in text_rects):
+                    out.append((float(r.x0), float(r.y0), float(r.x1), float(r.y1)))
+    except Exception:
+        return []
+    return out
+
+
+def _hidden_chars_map(path: str) -> tuple[
+    dict[int, list[tuple[float, float, str]]],
+    dict[int, list[tuple[float, float, float, float]]],
+]:
+    """全ページの隠し文字（白塗りで覆われたテキスト）と上貼り画像矩形を
+    まとめて検出する。
 
     pdfplumber の抽出（プロセス並列）と並行して別スレッドで走らせるため、
-    ページ番号 → 隠し文字リスト の辞書として返す。検出結果はページ単位で
-    従来の逐次検出と同一。
+    (ページ番号 → 隠し文字リスト, ページ番号 → 上貼り画像矩形リスト) の
+    辞書ペアとして返す。検出結果はページ単位で従来の逐次検出と同一。
     """
-    out: dict[int, list[tuple[float, float, str]]] = {}
+    hidden: dict[int, list[tuple[float, float, str]]] = {}
+    overlays: dict[int, list[tuple[float, float, float, float]]] = {}
     try:
         doc = fitz.open(path)
     except Exception:
-        return out
+        return hidden, overlays
     try:
         for i in range(doc.page_count):
-            hc = _hidden_chars(doc.load_page(i))
+            page = doc.load_page(i)
+            hc = _hidden_chars(page)
             if hc:
-                out[i + 1] = hc
+                hidden[i + 1] = hc
+            ov = _overlay_image_rects(page)
+            if ov:
+                overlays[i + 1] = ov
     finally:
         doc.close()
-    return out
+    return hidden, overlays
 
 
 def get_pages(pdf_path: Path | str) -> list[PageData]:
@@ -546,12 +590,19 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as tex:
         hidden_fut = tex.submit(_hidden_chars_map, path)
         entries = _extract_all_pages(path)
-        hidden_map = hidden_fut.result()
+        hidden_map, overlay_map = hidden_fut.result()
 
     pages = []
     for entry in entries:
         i = entry["index"]
         raw_words = entry["words"]
+        # 白塗り矩形で覆われた（見えない）テキストを除外。
+        # テキスト合成より先に行うことで、白塗りで「削除」された検討
+        # ブロックが行ベースのパーサー（pd.text 利用側）に漏れて
+        # 存在しない部材を誤検出するのを防ぐ。
+        hidden = hidden_map.get(i)
+        if hidden:
+            raw_words = _filter_hidden_words(raw_words, hidden)
         # extract_text() は非常に重いため、抽出済みの語から等価な
         # テキストを合成する（照合時間の大幅短縮）。
         # YHG_LEGACY_TEXT=1 のときは従来の extract_text() を使う
@@ -560,10 +611,6 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
             raw_text = entry["legacy_text"]
         else:
             raw_text = _compose_text_from_words(raw_words)
-        # 白塗り矩形で覆われた（見えない）テキストを除外
-        hidden = hidden_map.get(i)
-        if hidden:
-            raw_words = _filter_hidden_words(raw_words, hidden)
         # CID不具合の正規化＋縦書き数字の逆順補正を適用
         for w in raw_words:
             w["text"] = _fix_reversed_digits(normalize_pdf_text(w["text"]))
@@ -584,6 +631,7 @@ def get_pages(pdf_path: Path | str) -> list[PageData]:
             words=raw_words,
             width=entry["width"],
             height=entry["height"],
+            overlay_rects=overlay_map.get(i, []),
         ))
 
     _disk_cache_save(disk_path, pages)

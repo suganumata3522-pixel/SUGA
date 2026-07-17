@@ -46,18 +46,21 @@ _RE_MATERIAL = re.compile(
 _RE_SECTION = re.compile(r"B\s*x\s*D\s*=\s*(\d+)\s*x\s*(\d+)")
 _RE_MARK_LINE = re.compile(r"^符号\s+(.+)$")
 _RE_POS_LINE = re.compile(r"^位置\s+(.+)$")
-_RE_TOP_LINE = re.compile(r"^主筋\s*上\s+(.+)$")
-_RE_BOT_LINE = re.compile(r"^下\s+(.+)$")
-_RE_ST_LINE = re.compile(r"^ST\.\s+(.+)$")
+# 一部の計算書は表の左に縦書きの区分ラベル（曲/げ/せ/ん/断）があり、
+# 行テキストが "曲 主筋 上 …"・"げ 下 …"・"せ ST. …" のようになる。
+# 行頭の区分ラベル1文字を許容してアンカーする。
+_RE_TOP_LINE = re.compile(r"^(?:曲\s+)?主筋\s*上\s+(.+)$")
+_RE_BOT_LINE = re.compile(r"^(?:げ\s+)?下\s+(.+)$")
+_RE_ST_LINE = re.compile(r"^(?:せ\s+)?ST\.\s+(.+)$")
 
 # 梁符号の判定（行内に符号として混在する語かを判定するのに使う）
-_BEAM_MARK_RE = re.compile(r"^(?:WCB|CWB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?$")
+_BEAM_MARK_RE = re.compile(r"^(?:WCB|CWB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FW|FB|FG|B)\d+[A-Za-z]?$")
 
 # Union System SS7 出力の小梁1行を抽出する正規表現。
 # 例: "[ FB1 ] [B1SL X2 Y3 X3 Y4] 方向 Y 上端 4-D25 4-D25 4-D25 3-D13 MD ..."
 #     "           下端 4-D25 4/2-D25 4-D25 @200 MA ..."
 #     "B×D 500×1850 単スパン φI 1.000 L 8500 ..."
-_RE_SS7_MARK = re.compile(r"^\s*\[\s*((?:WCB|CWB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?)\s*\]")
+_RE_SS7_MARK = re.compile(r"^\s*\[\s*((?:WCB|CWB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FW|FB|FG|B)\d+[A-Za-z]?)\s*\]")
 _RE_SS7_BXD = re.compile(r"B\s*[×x]\s*D\s+(\d+)\s*[×x]\s*(\d+)")
 _RE_SS7_TOP = re.compile(r"上端\s+(.+)")
 _RE_SS7_BOT = re.compile(r"下端\s+(.+)")
@@ -135,10 +138,11 @@ def _parse_symbol_line(marks_field: str) -> list[list[str]]:
 def _tokens_top_bottom(line: str) -> list[str]:
     """主筋行の値を位置数に対応するトークンへ分割する。
     "4-D22 4-D22 4/2-D22" → ["4-D22", "4-D22", "4/2-D22"]
-    一部 PDF は "3 -D25" のように本数と "-D??" の間に空白を含むため
+    一部 PDF は "3 -D25" のように本数と "-D??" の間に空白を含むほか、
+    2段筋が "5/ 5 -D25" のようにスラッシュの後にも空白が入るため
     空白を許容し、抽出後の文字列からは空白を除去する。
     """
-    return [re.sub(r"\s+", "", t) for t in re.findall(r"\d+(?:/\d+)?\s*-D\d+", line)]
+    return [re.sub(r"\s+", "", t) for t in re.findall(r"\d+(?:\s*/\s*\d+)?\s*-D\d+", line)]
 
 
 def _tokens_st(line: str) -> list[str]:
@@ -267,6 +271,13 @@ class StructureSuitePdfParser(Parser):
 
             # ページ単位で field_bboxes を補完
             _attach_field_bboxes(members, page_words, page_idx)
+
+            # 上貼り画像編集されたブロックを「要目視確認」にする。
+            # テキスト抽出は画像の下に残った修正前の値を読むため、
+            # 見た目（画像）と抽出値が食い違う可能性がある。
+            overlays = getattr(pd, "overlay_rects", None)
+            if overlays:
+                _flag_overlay_members(members, overlays, page_idx)
 
         return MemberSet(source=self.source, file_name=pdf_path.name, members=members)
 
@@ -597,6 +608,39 @@ class StructureSuitePdfParser(Parser):
                     existing.extra_field_bboxes.append({})
 
 
+_OVERLAY_REVIEW_NOTE = (
+    "計算書の検討ブロックに画像の上貼り編集があります。"
+    "抽出値は画像の下に残った修正前のテキストの可能性があるため、"
+    "計算書の見た目の値と一致しているか目視確認してください。"
+)
+
+
+def _bbox_overlaps(a: tuple[float, float, float, float],
+                   b: tuple[float, float, float, float],
+                   min_w: float = 20.0, min_h: float = 5.0) -> bool:
+    """2つの矩形が実質的に重なるか（線接触程度は重なりとみなさない）。"""
+    w = min(a[2], b[2]) - max(a[0], b[0])
+    h = min(a[3], b[3]) - max(a[1], b[1])
+    return w >= min_w and h >= min_h
+
+
+def _flag_overlay_members(members: list[BeamMember],
+                          overlays: list[tuple[float, float, float, float]],
+                          page_idx: int) -> None:
+    """上貼り画像に掛かる検討ブロックの部材へ needs_review を立てる。"""
+    for m in members:
+        if m.needs_review:
+            continue
+        locs = []
+        if m.location is not None and m.location.page == page_idx and m.location.bbox:
+            locs.append(m.location.bbox)
+        locs += [loc.bbox for loc in m.extra_locations
+                 if loc.page == page_idx and loc.bbox]
+        if any(_bbox_overlaps(bb, ov) for bb in locs for ov in overlays):
+            m.needs_review = True
+            m.review_note = _OVERLAY_REVIEW_NOTE
+
+
 def _group_lines(words: list[dict], tol: float = 2.0) -> list[tuple[float, list[dict]]]:
     """y が近い語をグループ化して行に分ける。"""
     if not words:
@@ -663,11 +707,16 @@ def _attach_field_bboxes(members: list[BeamMember], page_words: list[dict], page
             y2, row2 = rows[rj]
             if not row2:
                 continue
-            first = row2[0]["text"]
+            # 縦書きの区分ラベル（曲/げ/せ/ん/断）が行頭に付く形式では
+            # 2語目が本来の行ラベル（主筋/下/ST. 等）になる。
+            lead = row2[0]
+            if lead["text"] in ("曲", "げ", "せ", "ん", "断") and len(row2) >= 2:
+                lead = row2[1]
+            first = lead["text"]
             if first == "符号" or first.startswith("No.") or first.startswith("断面計算"):
                 break
             if first in label_keys:
-                lx = float(row2[0]["x0"])
+                lx = float(lead["x0"])
                 label_x_lo = lx if label_x_lo is None else min(label_x_lo, lx)
                 key = label_keys[first]
                 if key:

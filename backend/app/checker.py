@@ -88,6 +88,30 @@ def _parse_rebar(v: str) -> tuple[int, int, int, int | None] | None:
     return (main, second, size, pitch)
 
 
+def _rebar_sets_total_equivalent(ds: set[str], cs: set[str]) -> bool:
+    """表記違い（合計本数 vs 段割り）の集合を等価とみなせるか判定する。
+
+    構造図の梁リストには 2 段筋を合計本数で書く形式（例: "8-D25"）があり、
+    計算書は段割りで出力する（例: "4/4-D25"）。同じ径・同じピッチで
+    合計本数が一致していれば整合とみなす。
+
+    段割り情報の食い違い（例: 図 4/2 vs 計 2/4）を合計だけで
+    誤って一致扱いしないよう、この緩和はどちらか一方の集合が
+    すべて合計表記（段割りなし）のときに限って適用する。
+    """
+    parsed_d = [_parse_rebar(v) for v in ds]
+    parsed_c = [_parse_rebar(v) for v in cs]
+    if any(p is None for p in parsed_d + parsed_c):
+        return False
+    if not (all(p[1] == 0 for p in parsed_d) or all(p[1] == 0 for p in parsed_c)):
+        return False
+
+    def classes(parsed):
+        return {(size, pitch, main + second) for (main, second, size, pitch) in parsed}
+
+    return classes(parsed_d) == classes(parsed_c)
+
+
 def _rebar_envelope_covers(draw_val: str, calc_set: set[str]) -> bool:
     """構造図の単一「全断面」値が計算書の各位置値を「包絡」しているか。
 
@@ -341,6 +365,10 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
             cs = _aggregate_rebar(c, attr)
             if not (ds and cs) or ds == cs:
                 continue
+            # 合計本数表記（図 "8-D25"）と段割り表記（計 "4/4-D25"）の
+            # 表記違いは整合とみなす。
+            if _rebar_sets_total_equivalent(ds, cs):
+                continue
             field = FieldDiff(
                 field=label,
                 drawing_value=" / ".join(sorted(ds)),
@@ -399,7 +427,7 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
         #  ・計算書の同符号 検討 内で位置別に配筋が異なる (B1A ケース)
         #  ・計算書の同符号で 断面寸法 が異なる検討あり (構造的に別断面)
         needs_review = (
-            d.needs_review or continuous or envelope_only
+            d.needs_review or c.needs_review or continuous or envelope_only
             or (multi_study and any_study_nonuniform)
             or multi_section
         )
@@ -408,6 +436,8 @@ def compare(drawing: MemberSet, calc: MemberSet) -> list[Diff]:
             parts = [c.note or ""]
             if d.review_note:
                 parts.append(d.review_note)
+            if c.review_note:
+                parts.append(c.review_note)
             if continuous:
                 parts.append("連梁（通り芯により配筋が異なる）のため目視確認が必要")
             if envelope_only:

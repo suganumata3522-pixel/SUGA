@@ -20,7 +20,7 @@ from ..models import BeamMember, LocationHint, MemberSet, PositionRebar, Section
 from .base import Parser
 from .pdf_cache import get_pages
 
-_MARK_ALT = r"(?:WCB|CWB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FB|FG|B)\d+[A-Za-z]?"
+_MARK_ALT = r"(?:WCB|CWB|FCG|FCB|CGX|CGY|CPG|CG|CB|WB|FW|FB|FG|B)\d+[A-Za-z]?"
 _MARK_RE = re.compile(rf"^{_MARK_ALT}$")
 # 符号トークンが符号で始まるか（"B1（B1A）" 等の複合符号の先頭判定用）
 _MARK_HEAD_RE = re.compile(rf"^{_MARK_ALT}")
@@ -52,6 +52,9 @@ def _extract_marks_from_token(text: str) -> list[str]:
 _BAR_SIZE = r"(?:10|13|16|19|22|25|29|32|35|38|41)"
 _REBAR_RE = re.compile(rf"\d+(?:/\d+)?-D{_BAR_SIZE}(?:@\d+)?")
 _FCCODE_RE = re.compile(r"^\d{3}$")
+# 「断面寸法(BxD)」行の結合トークン。例: "500x1,850" / "1200x2700" /
+# "350x600〜400"（テーパー梁: 〜以降は先端側の梁成で、Bと元端Dは前半から取る）
+_BXD_TOKEN_RE = re.compile(r"^([\d,]{3,5})[xX×]([\d,]+?)(?:[〜~][\d,]+)?$")
 
 
 @dataclass
@@ -568,14 +571,14 @@ class DrawingPdfParser(Parser):
                         words, grp, x_lo, x_hi, positions)
                 fc_code = self._extract_fc_code(words, grp, fc_lo, fc_hi)
                 mark_center_x = (float(mw["x0"]) + float(mw["x1"])) / 2
-                B, b_box = self._extract_section_B(words, grp, fc_lo, fc_hi, mark_center_x)
+                B, D, b_box = self._extract_section_B(words, grp, fc_lo, fc_hi, mark_center_x)
                 field_bboxes = self._field_bboxes(grp, terr_lo, terr_hi, b_box=b_box)
                 # 複合符号（"B1（B1A）" 等）は同一断面・配筋・bbox を共有する
                 # 派生符号を含めて全て emit する。
                 for mk in marks:
                     out.append(BeamMember(
                         mark=mk,
-                        section=Section(B=B, D=None),
+                        section=Section(B=B, D=D),
                         positions=positions,
                         fc_code=fc_code,
                         source=self.source,
@@ -847,8 +850,14 @@ class DrawingPdfParser(Parser):
 
     @staticmethod
     def _extract_section_B(words, grp, x_lo, x_hi, mark_center_x: float | None = None):
-        """断面の幅 B を抽出する。戻り値は (B値, 幅数値の bbox)。B が取れない
-        場合は (None, None)。bbox は差分赤枠を実際の幅数値へ合わせるために使う。
+        """断面の幅 B（と分かれば梁成 D）を抽出する。戻り値は
+        (B値, D値, 幅数値の bbox)。B が取れない場合は (None, None, None)。
+        bbox は差分赤枠を実際の幅数値へ合わせるために使う。
+
+        一部の図面（基礎小梁リスト等）は断面図に幅数値を書かず、
+        「断面寸法(BxD)」行に "500x1,850" のような結合テキストで書く。
+        この形式が列内にあれば最優先で採用する。断面図内のレベル注記
+        （"700" 等の下がり寸法）を幅と誤認しないための対策でもある。
 
         梁リストの断面図には、上から順に
           ・梁天端レベル（"1SL-350" 等、基準レベルからの下がり）
@@ -874,7 +883,7 @@ class DrawingPdfParser(Parser):
         y_pos = grp.get("位置")
         y_top_label = grp.get("上端筋")
         if y_sec is None and y_pos is None:
-            return None, None
+            return None, None, None
 
         def _val(w):
             try: return int(w["text"])
@@ -893,6 +902,28 @@ class DrawingPdfParser(Parser):
         else:
             hi = lo + 120
 
+        # 「断面寸法(BxD)」行の結合テキスト（"500x1,850" / "350x600〜400" 等）を
+        # 最優先で探す。テーパー梁の "〜400" は先端側の梁成で、幅 B と
+        # 元端の梁成 D は前半から取れる。
+        bxd_cands = []
+        for w in words:
+            if not (x_lo <= float(w["x0"]) < x_hi and lo < float(w["top"]) < hi):
+                continue
+            m = _BXD_TOKEN_RE.match(w["text"])
+            if not m:
+                continue
+            b_val = int(m.group(1).replace(",", ""))
+            d_val = int(m.group(2).replace(",", ""))
+            if 100 <= b_val <= 2000 and 100 <= d_val <= 6000:
+                bxd_cands.append((w, b_val, d_val))
+        if bxd_cands:
+            if mark_center_x is not None:
+                bxd_cands.sort(key=lambda t: abs((float(t[0]["x0"]) + float(t[0]["x1"])) / 2 - mark_center_x))
+            chosen, b_val, d_val = bxd_cands[0]
+            box = (float(chosen["x0"]), float(chosen["top"]),
+                   float(chosen["x1"]), float(chosen["bottom"]))
+            return b_val, d_val, box
+
         cands = [
             w for w in words
             if x_lo <= float(w["x0"]) < x_hi
@@ -901,7 +932,7 @@ class DrawingPdfParser(Parser):
             and 150 <= _val(w) <= 1500
         ]
         if not cands:
-            return None, None
+            return None, None, None
         # 最下段（top 最大）を優先。top を ±4pt でビン化して同段扱いにし、
         # 同段内では符号中心 x に最も近いものを採る。
         max_top = max(float(w["top"]) for w in cands)
@@ -914,7 +945,7 @@ class DrawingPdfParser(Parser):
             chosen = bottom_row[0]
             box = (float(chosen["x0"]), float(chosen["top"]),
                    float(chosen["x1"]), float(chosen["bottom"]))
-            return int(chosen["text"]), box
+            return int(chosen["text"]), None, box
         except (ValueError, KeyError):
-            return None, None
+            return None, None, None
 
