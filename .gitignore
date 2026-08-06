@@ -18,6 +18,9 @@ dist/
 *.sqlite
 *.sqlite-journal
 backend/data/
+
+# PDF抽出のディスクキャッシュ（内容ハッシュ + 抽出バージョンで自動再生成）
+backend/parse_cache/
 backend/uploads/
 backend/parse_cache/
 YHG-data/
