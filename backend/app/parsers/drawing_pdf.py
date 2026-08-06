@@ -55,6 +55,9 @@ _FCCODE_RE = re.compile(r"^\d{3}$")
 # 「断面寸法(BxD)」行の結合トークン。例: "500x1,850" / "1200x2700" /
 # "350x600〜400"（テーパー梁: 〜以降は先端側の梁成で、Bと元端Dは前半から取る）
 _BXD_TOKEN_RE = re.compile(r"^([\d,]{3,5})[xX×]([\d,]+?)(?:[〜~][\d,]+)?$")
+# 符号行で「列」として数えるが照合対象ではないトークン（基礎大梁 FGX1 /
+# FGY2A 等）。対象符号（_MARK_RE）に一致しないがリストの符号セルを占める。
+_COLUMN_TOKEN_RE = re.compile(r"^[A-Z]{1,5}\d+[A-Za-z]?$")
 
 
 @dataclass
@@ -421,6 +424,12 @@ class DrawingPdfParser(Parser):
         # 各グループの y 範囲：このグループの「符号 y」～次のグループの「符号 y」（または +200）
         out: list[BeamMember] = []
         for gi, grp in enumerate(groups):
+            # 梁リスト以外の表（壁リスト・スラブリスト等）を除外する。
+            # 壁リストは「符号 / 断面 / 縦筋 / 横筋」構成で 上端筋・下端筋 を
+            # 持たない。ここを弾かないと FW20 のような壁符号が小梁として
+            # 誤検出される（符号の綴りだけでは梁と壁を区別できない）。
+            if "上端筋" not in grp and "下端筋" not in grp:
+                continue
             y_top = grp["符号"]
             # 枠の下端は、このグループのラベル行（断面/上端筋/下端筋/STP/腹筋）の
             # 最下 y + 余白とする。これにより:
@@ -446,18 +455,29 @@ class DrawingPdfParser(Parser):
             # 符号行 (y≈grp["符号"]) の語を抽出。"B1（B1A）" のような複合符号は
             # 1 列に複数符号が対応する（主符号＋派生符号）。各語に marks を付与し、
             # 列 x の基準は主符号（先頭）とする。
+            # 対象外の符号（基礎大梁 FGX1 / FGY2 等）が同じ表に混在する場合、
+            # それらの列を無視すると位置ラベル・配筋値の列対応が左へずれ、
+            # 対象部材が隣の列の値を巻き込んでしまう。対象外でも「列」としては
+            # 数え（emit=False）、部材としては出力しないことで列対応を保つ。
             mark_words = []
+            has_target = False
             for w in band:
                 if abs(float(w["top"]) - grp["符号"]) > 3:
                     continue
                 marks = _extract_marks_from_token(w["text"])
-                if not marks:
-                    continue
-                aug = dict(w)
-                aug["marks"] = marks
-                aug["text"] = marks[0]  # 列 x/中心の基準は主符号
-                mark_words.append(aug)
-            if not mark_words:
+                if marks:
+                    aug = dict(w)
+                    aug["marks"] = marks
+                    aug["text"] = marks[0]  # 列 x/中心の基準は主符号
+                    aug["emit"] = True
+                    mark_words.append(aug)
+                    has_target = True
+                elif _COLUMN_TOKEN_RE.match(w["text"]):
+                    aug = dict(w)
+                    aug["marks"] = []
+                    aug["emit"] = False
+                    mark_words.append(aug)
+            if not has_target:
                 continue
             # 列幅は次の符号と同列ラベル列の右端で決まる
             mark_xs = [float(w["x0"]) for w in mark_words]
@@ -533,6 +553,8 @@ class DrawingPdfParser(Parser):
             for mi, ((x_lo, x_hi), mw) in enumerate(zip(bounds, mark_words_sorted)):
                 mark_x = float(mw["x0"])
                 marks = mw.get("marks", [mw["text"]])
+                if not mw.get("emit", True):
+                    continue  # 列合わせ専用（照合対象外の符号）
                 if mi in ketsuban_marks:
                     # 欠番符号: 位置・配筋・断面なし。BeamMember として残し note="欠番"。
                     for mk in marks:
